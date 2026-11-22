@@ -28,24 +28,36 @@ import java.util.function.Consumer;
  * rechnet die Kennzahlen aus den Sichten HH_VERGLEICH_V und HH_SCHEITEL_PAAR_V und baut daraus die Datei für die App
  * ({@code guete.datei}). Ein Lauf wird als Ganzes ersetzt, wenn sich seine Kennung ändert; sonst bleibt er, wie er ist.
  * Läufe, die nicht mehr in der Datei stehen, bleiben mit AKTIV = 'N' (gelöscht wird nichts davon).
+ * <p>
+ * Seit DB4 (Werkbuch HalligHooge 173): dazu der Wind des Modells an den Windstationen (HH_MODELL_WIND, HH_GUETE_WIND) gegen
+ * den DWD (HH_WIND_VERGLEICH_V, auf 10 m gebracht mit dem logarithmischen Profil über See, z0 = 0,2 mm wie in P13d) und je
+ * Pegel das gemessene Mittelwasser und das Tidemittel (HH_GUETE).
  */
 public final class Guetebau {
     private Guetebau() { }
 
     /** Was {@link #einlesen} getan hat. */
-    public record Bilanz(int laeufe, int neu, int gleich, int werte, int marken, int pegel, List<String> ohneStation, int still) {
+    public record Bilanz(int laeufe, int neu, int gleich, int werte, int marken, int pegel, List<String> ohneStation, int still, int wind) {
         public String kurz() {
-            return String.format(Locale.GERMAN, "%d Läufe (%d neu oder ersetzt, %d unverändert), %d Werte und %d Scheitel des Modells an %d Pegeln%s%s", laeufe, neu, gleich, werte,
-                    marken, pegel, ohneStation.isEmpty() ? "" : ", ohne Station im Archiv: " + ohneStation, still > 0 ? ", " + still + " Läufe stillgelegt" : "");
+            return String.format(Locale.GERMAN, "%d Läufe (%d neu oder ersetzt, %d unverändert), %d Werte und %d Scheitel des Modells an %d Pegeln, %d Werte des Winds%s%s", laeufe,
+                    neu, gleich, werte, marken, pegel, wind, ohneStation.isEmpty() ? "" : ", ohne Station im Archiv: " + ohneStation, still > 0 ? ", " + still + " Läufe stillgelegt" : "");
         }
+    }
+
+    /** Rauheit über See für das Profil des Winds (m) [G], wie {@code XaverCheck} (P13d). */
+    public static final double Z0_SEE = 2e-4;
+
+    /** Seit DB4: die gemessene Geschwindigkeit in der Höhe des Gebers auf 10 m (logarithmisches Profil über See). */
+    public static double auf10m(double u, double geber) {
+        return geber > 0 && !Double.isNaN(geber) ? u * Math.log(10 / Z0_SEE) / Math.log(geber / Z0_SEE) : u;
     }
 
     // ------------------------------------------------------------------ einlesen
 
     public static Bilanz einlesen(Messarchiv ar, Guete modell, Consumer<String> log) throws SQLException {
         String p = ar.p;
-        Map<String, Messarchiv.Station> st = ar.stationen("PEGEL");
-        int neu = 0, gleich = 0, werte = 0, marken = 0;
+        Map<String, Messarchiv.Station> st = ar.stationen("PEGEL"), sw = ar.stationen("WIND");
+        int neu = 0, gleich = 0, werte = 0, marken = 0, wind = 0;
         Set<String> pegel = new HashSet<>();
         List<String> ohne = new ArrayList<>();
         boolean auto = ar.c.getAutoCommit();
@@ -89,7 +101,7 @@ public final class Guetebau {
                     ar.c.commit();
                     continue;
                 }
-                for (String t : new String[] {"MODELL", "MODELL_SCHEITEL", "GUETE"})
+                for (String t : new String[] {"MODELL", "MODELL_SCHEITEL", "GUETE", "MODELL_WIND", "GUETE_WIND"})
                     try (PreparedStatement s = ar.c.prepareStatement("DELETE FROM " + p + t + " WHERE LAUF_ID = ?")) {
                         s.setInt(1, id);
                         s.executeUpdate();
@@ -135,6 +147,36 @@ public final class Guetebau {
                     sk.executeBatch();
                     sg.executeBatch();
                 }
+                // seit DB4: der Wind an den Stationen
+                try (PreparedStatement wm = ar.c.prepareStatement("INSERT INTO " + p + "MODELL_WIND (LAUF_ID, STATION_ID, ZEIT, FF, DD) VALUES (?, ?, " + Messarchiv.TD + ", ?, ?)");
+                     PreparedStatement wg = ar.c.prepareStatement("INSERT INTO " + p + "GUETE_WIND (LAUF_ID, STATION_ID, GITTER, ZELLE, ABSTAND) VALUES (?, ?, ?, ?, ?)")) {
+                    for (Guete.Wind w : modell.winde(l.schluessel())) {
+                        Messarchiv.Station s = sw.get(w.station());
+                        if (s == null) {
+                            if (!ohne.contains("Wind " + w.station())) ohne.add("Wind " + w.station());
+                            continue;
+                        }
+                        for (int i = 0; i < w.ff().n(); i++) {
+                            float f = w.ff().werte()[i];
+                            if (Float.isNaN(f) || f < 0 || f > 80) continue;
+                            wm.setInt(1, id);
+                            wm.setInt(2, s.id());
+                            wm.setString(3, Messarchiv.zeit(w.ff().zeit(i).getEpochSecond()));
+                            wm.setDouble(4, rund(f, 100));
+                            Messarchiv.setze(wm, 5, i < w.dd().n() ? rund(w.dd().werte()[i], 10) : Double.NaN);
+                            wm.addBatch();
+                            wind++;
+                        }
+                        wg.setInt(1, id);
+                        wg.setInt(2, s.id());
+                        wg.setString(3, w.gitter());
+                        wg.setInt(4, w.zelle());
+                        Messarchiv.setze(wg, 5, rund(w.abstand(), 10));
+                        wg.addBatch();
+                    }
+                    wm.executeBatch();
+                    wg.executeBatch();
+                }
                 ar.c.commit();
                 neu++;
                 log.accept("Güte: Lauf " + l.schluessel() + (alt == null ? " neu" : " ersetzt (Kennung " + alt + " → " + l.kennung() + ")"));
@@ -154,7 +196,7 @@ public final class Guetebau {
                 }
             }
             ar.c.commit();
-            return new Bilanz(modell.laeufe.size(), neu, gleich, werte, marken, pegel.size(), ohne, still);
+            return new Bilanz(modell.laeufe.size(), neu, gleich, werte, marken, pegel.size(), ohne, still, wind);
         } catch (SQLException e) {
             ar.c.rollback();
             throw e;
@@ -203,6 +245,16 @@ public final class Guetebau {
      */
     public static Guete.Kennzahlen kennzahlen(double[] modell, double[] messung, List<Guete.Paar> paare, Guete.Reihe reihe, List<Guete.Marke> marken, double hthw,
             LocalDate tag, double stauMin, ZoneId zone) {
+        return kennzahlen(modell, messung, paare, reihe, marken, hthw, tag, stauMin, zone, Double.NaN, Double.NaN, 0);
+    }
+
+    /**
+     * Seit DB4 mit dem gemessenen Mittelwasser (lange Mittel um den Lauf), dem Tidemittel (eine Tide um seine Mitte) und dem
+     * Mittel im Antrieb des Modells: Bias ohne Mittelwasser = Bias + (Mittelwasser − Mittel im Antrieb), also der Bias, den
+     * das Modell hätte, wenn es um das fehlende Mittelwasser höher stünde.
+     */
+    public static Guete.Kennzahlen kennzahlen(double[] modell, double[] messung, List<Guete.Paar> paare, Guete.Reihe reihe, List<Guete.Marke> marken, double hthw,
+            LocalDate tag, double stauMin, ZoneId zone, double mittelwasser, double tidemittel, double antriebMittel) {
         int n = Math.min(modell.length, messung.length);
         double[] m = Arrays.copyOf(modell, n), g = Arrays.copyOf(messung, n);
         double rmse = n > 0 ? Statistik.rmse(m, g) : Double.NaN, bias = n > 0 ? Statistik.bias(m, g) : Double.NaN;
@@ -241,28 +293,135 @@ public final class Guetebau {
             }
         }
         return new Guete.Kennzahlen(n, rmse, bias, skill, r, hw, hw > 0 ? dt / hw : Double.NaN, hw > 0 ? dh / hw : Double.NaN, hw > 0 ? Math.sqrt(q / hw) : Double.NaN, sp,
-                sp > 0 && sg > 0 ? sm / sg : Double.NaN, max, maxZeit, kennwert, kt, amTag, amTagZeit);
+                sp > 0 && sg > 0 ? sm / sg : Double.NaN, max, maxZeit, kennwert, kt, amTag, amTagZeit, mittelwasser, tidemittel, bias + (mittelwasser - antriebMittel));
     }
 
+    /** Seit DB4: Unterschied zweier Richtungen (Grad) in −180 … 180. */
+    public static double winkel(double a, double b) { return ((a - b) % 360 + 540) % 360 - 180; }
+
+    /**
+     * Seit DB4: die Kennzahlen des Winds (rein, ohne Datenbank) aus Paaren zur selben Zeit: Geschwindigkeit des Modells und der
+     * Messung (schon auf 10 m), Richtungen. Faktor und Richtung zählen ab {@code min} m/s gemessen, „Sturm“ ab {@code sturm}.
+     */
+    public static Guete.Windzahlen windzahlen(double[] ffM, double[] ddM, double[] ffG, double[] ddG, double min, double sturm) {
+        int n = 0, ns = 0;
+        double d = 0, d2 = 0, sm = 0, sg = 0, smS = 0, sgS = 0, dS = 0, r = 0, wr = 0, rS = 0, wrS = 0, mm = Double.NaN, mg = Double.NaN;
+        for (int i = 0; i < Math.min(ffM.length, ffG.length); i++) {
+            double m = ffM[i], g = ffG[i];
+            if (Double.isNaN(m) || Double.isNaN(g)) continue;
+            n++;
+            d += m - g;
+            d2 += (m - g) * (m - g);
+            if (!(mm >= m)) mm = m;
+            if (!(mg >= g)) mg = g;
+            boolean rich = i < ddM.length && i < ddG.length && !Double.isNaN(ddM[i]) && !Double.isNaN(ddG[i]);
+            if (g >= min) {
+                sm += m;
+                sg += g;
+                if (rich) { r += g * winkel(ddM[i], ddG[i]); wr += g; }
+            }
+            if (g >= sturm) {
+                ns++;
+                smS += m;
+                sgS += g;
+                dS += m - g;
+                if (rich) { rS += g * winkel(ddM[i], ddG[i]); wrS += g; }
+            }
+        }
+        return new Guete.Windzahlen(n, sg > 0 ? sm / sg : Double.NaN, n > 0 ? d / n : Double.NaN, n > 0 ? Math.sqrt(d2 / n) : Double.NaN, wr > 0 ? r / wr : Double.NaN, ns,
+                sgS > 0 ? smS / sgS : Double.NaN, ns > 0 ? dS / ns : Double.NaN, wrS > 0 ? rS / wrS : Double.NaN, mm, mg);
+    }
+
+    /** Seit DB4: rechnet die Kennzahlen des Winds aller aktiven Läufe und schreibt sie in HH_GUETE_WIND; gibt die Zahl der Zeilen. */
+    public static int rechnenWind(Messarchiv ar, double min, double sturm) throws SQLException {
+        String p = ar.p;
+        List<double[]> zeilen = new ArrayList<>();
+        try (Statement s = ar.c.createStatement(); ResultSet r = s.executeQuery("SELECT g.LAUF_ID, g.STATION_ID, s.GEBER FROM " + p + "GUETE_WIND g JOIN " + p
+                + "LAUF l ON l.LAUF_ID = g.LAUF_ID JOIN " + p + "STATION s ON s.STATION_ID = g.STATION_ID WHERE l.AKTIV = 'J' ORDER BY g.LAUF_ID, g.STATION_ID")) {
+            while (r.next()) zeilen.add(new double[] {r.getInt(1), r.getInt(2), Messarchiv.zahl(r, 3)});
+        }
+        int n = 0;
+        try (PreparedStatement u = ar.c.prepareStatement("UPDATE " + p + "GUETE_WIND SET WERTE = ?, FAKTOR = ?, BIAS = ?, RMSE = ?, RICHTUNG = ?, STURM_WERTE = ?, STURM_FAKTOR = ?, "
+                + "STURM_BIAS = ?, STURM_RICHTUNG = ?, MAX_MODELL = ?, MAX_MESSUNG = ?, BERECHNET = SYSDATE WHERE LAUF_ID = ? AND STATION_ID = ?")) {
+            for (double[] z : zeilen) {
+                int lauf = (int) z[0], station = (int) z[1];
+                List<double[]> l = new ArrayList<>();
+                try (PreparedStatement s = ar.c.prepareStatement("SELECT FF_MODELL, DD_MODELL, FF_MESSUNG, DD_MESSUNG FROM " + p
+                        + "WIND_VERGLEICH_V WHERE LAUF_ID = ? AND STATION_ID = ? ORDER BY ZEIT")) {
+                    s.setFetchSize(2000);
+                    s.setInt(1, lauf);
+                    s.setInt(2, station);
+                    try (ResultSet r = s.executeQuery()) {
+                        while (r.next()) l.add(new double[] {Messarchiv.zahl(r, 1), Messarchiv.zahl(r, 2), auf10m(Messarchiv.zahl(r, 3), z[2]), Messarchiv.zahl(r, 4)});
+                    }
+                }
+                double[][] a = new double[4][l.size()];
+                for (int i = 0; i < l.size(); i++) for (int k = 0; k < 4; k++) a[k][i] = l.get(i)[k];
+                Guete.Windzahlen w = windzahlen(a[0], a[1], a[2], a[3], min, sturm);
+                u.setInt(1, w.werte());
+                Messarchiv.setze(u, 2, rund(w.faktor(), 1000));
+                Messarchiv.setze(u, 3, rund(w.bias(), 100));
+                Messarchiv.setze(u, 4, rund(w.rmse(), 100));
+                Messarchiv.setze(u, 5, rund(w.richtung(), 10));
+                u.setInt(6, w.sturmWerte());
+                Messarchiv.setze(u, 7, rund(w.sturmFaktor(), 1000));
+                Messarchiv.setze(u, 8, rund(w.sturmBias(), 100));
+                Messarchiv.setze(u, 9, rund(w.sturmRichtung(), 10));
+                Messarchiv.setze(u, 10, rund(w.maxModell(), 100));
+                Messarchiv.setze(u, 11, rund(w.maxMessung(), 100));
+                u.setInt(12, lauf);
+                u.setInt(13, station);
+                n += u.executeUpdate();
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Seit DB4: das Mittel des gemessenen Wasserstands (HH_MITTEL, W) in [von, bis] (Epoch-Sekunden) oder NaN, wenn weniger
+     * als {@code mindestens} Werte da sind.
+     */
+    static double mittel(Messarchiv ar, int station, long von, long bis, long mindestens) throws SQLException {
+        try (PreparedStatement s = ar.c.prepareStatement("SELECT AVG(WERT), COUNT(*) FROM " + ar.p + "MITTEL WHERE STATION_ID = ? AND GROESSE = 'W' AND ZEIT BETWEEN "
+                + Messarchiv.TD + " AND " + Messarchiv.TD)) {
+            s.setInt(1, station);
+            s.setString(2, Messarchiv.zeit(von));
+            s.setString(3, Messarchiv.zeit(bis));
+            try (ResultSet r = s.executeQuery()) {
+                if (!r.next() || r.getLong(2) < mindestens) return Double.NaN;
+                return r.getDouble(1);
+            }
+        }
+    }
+
+    /** Eine Tide (Mondtag) in s: 24 h 50 min. */
+    public static final long TIDE_S = 89_400;
+
     /** Rechnet die Kennzahlen aller aktiven Läufe und Pegel und schreibt sie in HH_GUETE; gibt die Zahl der Zeilen. */
-    public static int rechnen(Messarchiv ar, double stauMin, ZoneId zone) throws SQLException {
+    public static int rechnen(Messarchiv ar, double stauMin, ZoneId zone) throws SQLException { return rechnen(ar, stauMin, zone, 30); }
+
+    /** Seit DB4 mit dem Mittelwasser über {@code mwTage} Tage um die Mitte des Laufs (mindestens die Hälfte der Werte) und dem Tidemittel (90 %). */
+    public static int rechnen(Messarchiv ar, double stauMin, ZoneId zone, double mwTage) throws SQLException {
         String p = ar.p;
         List<Object[]> zeilen = new ArrayList<>();
         try (Statement s = ar.c.createStatement(); ResultSet r = s.executeQuery("SELECT g.LAUF_ID, g.STATION_ID, " + Messarchiv.epoch("l.VON") + ", " + Messarchiv.epoch("l.BIS")
-                + ", l.SCHRITT_S, s.HTHW, TO_CHAR(s.HTHW_TAG, 'YYYY-MM-DD') FROM " + p + "GUETE g JOIN " + p + "LAUF l ON l.LAUF_ID = g.LAUF_ID JOIN " + p
+                + ", l.SCHRITT_S, s.HTHW, TO_CHAR(s.HTHW_TAG, 'YYYY-MM-DD'), l.ANTRIEB FROM " + p + "GUETE g JOIN " + p + "LAUF l ON l.LAUF_ID = g.LAUF_ID JOIN " + p
                 + "STATION s ON s.STATION_ID = g.STATION_ID WHERE l.AKTIV = 'J' ORDER BY g.LAUF_ID, g.STATION_ID")) {
-            while (r.next()) zeilen.add(new Object[] {r.getInt(1), r.getInt(2), r.getLong(3), r.getLong(4), r.getInt(5), Messarchiv.zahl(r, 6), r.getString(7)});
+            while (r.next()) zeilen.add(new Object[] {r.getInt(1), r.getInt(2), r.getLong(3), r.getLong(4), r.getInt(5), Messarchiv.zahl(r, 6), r.getString(7), r.getString(8)});
         }
         int n = 0;
         try (PreparedStatement u = ar.c.prepareStatement("UPDATE " + p + "GUETE SET WERTE = ?, RMSE = ?, BIAS = ?, SKILL = ?, KORRELATION = ?, HW = ?, HW_ZEIT = ?, HW_HOEHE = ?, "
                 + "HW_RMS = ?, STAU_PAARE = ?, STAU_ANTEIL = ?, MODELL_MAX = ?, MODELL_MAX_ZEIT = " + Messarchiv.TD + ", MODELL_AM_TAG = ?, MODELL_AM_TAG_ZEIT = " + Messarchiv.TD
-                + ", BERECHNET = SYSDATE WHERE LAUF_ID = ? AND STATION_ID = ?")) {
+                + ", MITTELWASSER = ?, TIDEMITTEL = ?, BIAS_OHNE_MW = ?, BERECHNET = SYSDATE WHERE LAUF_ID = ? AND STATION_ID = ?")) {
             for (Object[] z : zeilen) {
                 int lauf = (Integer) z[0], station = (Integer) z[1];
+                long von = (Long) z[2], bis = (Long) z[3], mitte = (von + bis) / 2, halb = Math.round(mwTage * 43_200);
+                double mw = mittel(ar, station, mitte - halb, mitte + halb, Math.round(mwTage * 72)), tm = mittel(ar, station, mitte - TIDE_S / 2, mitte + TIDE_S / 2, 134);
+                double am = new Guete.Lauf("", List.of(), "", "", null, null, null, 0, "", (String) z[7], "").mittel();
                 double[][] mg = vergleich(ar, lauf, station);
-                Guete.Reihe reihe = modellReihe(ar, lauf, station, (Long) z[2], (Long) z[3], (Integer) z[4]);
+                Guete.Reihe reihe = modellReihe(ar, lauf, station, von, bis, (Integer) z[4]);
                 Guete.Kennzahlen k = kennzahlen(mg[0], mg[1], paare(ar, lauf, station), reihe, modellMarken(ar, lauf, station), (Double) z[5],
-                        z[6] == null ? null : LocalDate.parse((String) z[6]), stauMin, zone);
+                        z[6] == null ? null : LocalDate.parse((String) z[6]), stauMin, zone, mw, tm, am);
                 u.setInt(1, k.werte());
                 Messarchiv.setze(u, 2, r3(k.rmse()));
                 Messarchiv.setze(u, 3, r3(k.bias()));
@@ -278,8 +437,11 @@ public final class Guetebau {
                 u.setString(13, k.maxZeit() == null ? null : Messarchiv.zeit(k.maxZeit().getEpochSecond()));
                 Messarchiv.setze(u, 14, r3(k.amTag()));
                 u.setString(15, k.amTagZeit() == null ? null : Messarchiv.zeit(k.amTagZeit().getEpochSecond()));
-                u.setInt(16, lauf);
-                u.setInt(17, station);
+                Messarchiv.setze(u, 16, r3(k.mittelwasser()));
+                Messarchiv.setze(u, 17, r3(k.tidemittel()));
+                Messarchiv.setze(u, 18, r3(k.biasOhneMw()));
+                u.setInt(19, lauf);
+                u.setInt(20, station);
                 n += u.executeUpdate();
             }
         }
@@ -386,19 +548,20 @@ public final class Guetebau {
             }
         }
         List<Guete.Eintrag> es = new ArrayList<>();
+        List<Guete.Wind> ws = new ArrayList<>();
         for (int k = 0; k < laeufe.size(); k++) {
             Guete.Lauf l = laeufe.get(k);
             int lauf = ids.get(k);
             List<Object[]> zeilen = new ArrayList<>();
             try (PreparedStatement s = ar.c.prepareStatement("SELECT g.STATION_ID, s.SCHLUESSEL, s.OST, s.NORD, g.GITTER, g.ZELLE, g.ABSTAND, g.GRUND, g.WERTE, g.RMSE, g.BIAS, "
                     + "g.SKILL, g.KORRELATION, g.HW, g.HW_ZEIT, g.HW_HOEHE, g.HW_RMS, g.STAU_PAARE, g.STAU_ANTEIL, g.MODELL_MAX, " + Messarchiv.epoch("g.MODELL_MAX_ZEIT")
-                    + ", s.HTHW, TO_CHAR(s.HTHW_TAG, 'YYYY-MM-DD'), g.MODELL_AM_TAG, " + Messarchiv.epoch("g.MODELL_AM_TAG_ZEIT") + ", g.BERECHNET FROM " + p + "GUETE g JOIN " + p
-                    + "STATION s ON s.STATION_ID = g.STATION_ID WHERE g.LAUF_ID = ?")) {
+                    + ", s.HTHW, TO_CHAR(s.HTHW_TAG, 'YYYY-MM-DD'), g.MODELL_AM_TAG, " + Messarchiv.epoch("g.MODELL_AM_TAG_ZEIT") + ", g.BERECHNET, g.MITTELWASSER, g.TIDEMITTEL, "
+                    + "g.BIAS_OHNE_MW FROM " + p + "GUETE g JOIN " + p + "STATION s ON s.STATION_ID = g.STATION_ID WHERE g.LAUF_ID = ?")) {
                 s.setInt(1, lauf);
                 try (ResultSet r = s.executeQuery()) {
                     while (r.next()) {
-                        Object[] z = new Object[26];
-                        for (int i = 1; i <= 26; i++) z[i - 1] = r.getObject(i);
+                        Object[] z = new Object[29];
+                        for (int i = 1; i <= 29; i++) z[i - 1] = r.getObject(i);
                         zeilen.add(z);
                     }
                 }
@@ -412,7 +575,8 @@ public final class Guetebau {
                     String tag = (String) z[22];
                     boolean mitTag = tag != null && deckt(l, LocalDate.parse(tag), zone);
                     kz = new Guete.Kennzahlen(ganz(z[8]), zahl(z[9]), zahl(z[10]), zahl(z[11]), zahl(z[12]), ganz(z[13]), zahl(z[14]), zahl(z[15]), zahl(z[16]), ganz(z[17]),
-                            zahl(z[18]), zahl(z[19]), zeit(z[20]), mitTag ? zahl(z[21]) : Double.NaN, mitTag ? LocalDate.parse(tag) : null, zahl(z[23]), zeit(z[24]));
+                            zahl(z[18]), zahl(z[19]), zeit(z[20]), mitTag ? zahl(z[21]) : Double.NaN, mitTag ? LocalDate.parse(tag) : null, zahl(z[23]), zeit(z[24]),
+                            zahl(z[26]), zahl(z[27]), zahl(z[28]));
                 }
                 long von = l.von().getEpochSecond(), bis = l.bis().getEpochSecond();
                 Guete.Reihe modell = modellReihe(ar, lauf, station, von, bis, l.schritt());
@@ -426,8 +590,67 @@ public final class Guetebau {
             }
             je.sort((a, b) -> Integer.compare(rang(ga, a.pegel()), rang(ga, b.pegel())));
             es.addAll(je);
+            ws.addAll(winde(ar, ga, l, lauf));
         }
-        return new Guete(quelle, Instant.now(), ga.einschwingen(), laeufe, es);
+        return new Guete(quelle, Instant.now(), ga.einschwingen(), laeufe, es, ws);
+    }
+
+    /** Seit DB4: die Windstationen eines Laufs mit Reihen (Modell, Messung auf 10 m) und Kennzahlen, in der Folge von {@code guete.wind}. */
+    static List<Guete.Wind> winde(Messarchiv ar, Guete.Auftrag ga, Guete.Lauf l, int lauf) throws SQLException {
+        String p = ar.p;
+        List<Object[]> zeilen = new ArrayList<>();
+        try (PreparedStatement s = ar.c.prepareStatement("SELECT g.STATION_ID, s.SCHLUESSEL, s.NAME, s.OST, s.NORD, s.GEBER, g.GITTER, g.ZELLE, g.ABSTAND, g.WERTE, g.FAKTOR, "
+                + "g.BIAS, g.RMSE, g.RICHTUNG, g.STURM_WERTE, g.STURM_FAKTOR, g.STURM_BIAS, g.STURM_RICHTUNG, g.MAX_MODELL, g.MAX_MESSUNG, g.BERECHNET FROM " + p
+                + "GUETE_WIND g JOIN " + p + "STATION s ON s.STATION_ID = g.STATION_ID WHERE g.LAUF_ID = ?")) {
+            s.setInt(1, lauf);
+            try (ResultSet r = s.executeQuery()) {
+                while (r.next()) {
+                    Object[] z = new Object[21];
+                    for (int i = 1; i <= 21; i++) z[i - 1] = r.getObject(i);
+                    zeilen.add(z);
+                }
+            }
+        }
+        long von = l.von().getEpochSecond(), bis = l.bis().getEpochSecond(), m0 = mittelAb(von);
+        List<Guete.Wind> ws = new ArrayList<>();
+        for (Object[] z : zeilen) {
+            int station = ganz(z[0]);
+            double geber = zahl(z[5]);
+            List<long[]> t = new ArrayList<>();
+            List<float[]> v = new ArrayList<>();
+            try (PreparedStatement s = ar.c.prepareStatement("SELECT " + Messarchiv.epoch("ZEIT") + ", FF, DD FROM " + p + "MODELL_WIND WHERE LAUF_ID = ? AND STATION_ID = ? ORDER BY ZEIT")) {
+                s.setFetchSize(2000);
+                s.setInt(1, lauf);
+                s.setInt(2, station);
+                try (ResultSet r = s.executeQuery()) {
+                    while (r.next()) {
+                        t.add(new long[] {r.getLong(1)});
+                        double dd = Messarchiv.zahl(r, 3);
+                        v.add(new float[] {r.getFloat(2), (float) dd});
+                    }
+                }
+            }
+            long[] tt = new long[t.size()];
+            float[] ff = new float[t.size()], dd = new float[t.size()];
+            for (int i = 0; i < tt.length; i++) { tt[i] = t.get(i)[0]; ff[i] = v.get(i)[0]; dd[i] = v.get(i)[1]; }
+            Guete.Reihe mf = new Guete.Reihe(l.von(), l.schritt(), Messarchiv.raster(new Messarchiv.Reihe(tt, ff), von, bis, l.schritt()));
+            Guete.Reihe md = new Guete.Reihe(l.von(), l.schritt(), Messarchiv.raster(new Messarchiv.Reihe(tt, dd), von, bis, l.schritt()));
+            Messarchiv.Reihe gf = ar.reihe("MITTEL", station, "FF", m0, bis), gd = ar.reihe("MITTEL", station, "DD", m0, bis);
+            float[] f10 = Messarchiv.raster(gf, m0, bis, 600);
+            for (int i = 0; i < f10.length; i++) if (!Float.isNaN(f10[i])) f10[i] = (float) auf10m(f10[i], geber);
+            Guete.Reihe ef = gf.n() == 0 || m0 > bis ? Guete.Reihe.LEER : new Guete.Reihe(Instant.ofEpochSecond(m0), 600, f10);
+            Guete.Reihe ed = gd.n() == 0 || m0 > bis ? Guete.Reihe.LEER : new Guete.Reihe(Instant.ofEpochSecond(m0), 600, Messarchiv.raster(gd, m0, bis, 600));
+            Guete.Windzahlen wz = z[20] == null ? Guete.Windzahlen.LEER : new Guete.Windzahlen(ganz(z[9]), zahl(z[10]), zahl(z[11]), zahl(z[12]), zahl(z[13]), ganz(z[14]),
+                    zahl(z[15]), zahl(z[16]), zahl(z[17]), zahl(z[18]), zahl(z[19]));
+            ws.add(new Guete.Wind(l.schluessel(), (String) z[1], (String) z[2], zahl(z[3]), zahl(z[4]), geber, (String) z[6], ganz(z[7]), zahl(z[8]), mf, md, ef, ed, wz));
+        }
+        ws.sort((a, b) -> Integer.compare(windRang(ga, a.station()), windRang(ga, b.station())));
+        return ws;
+    }
+
+    static int windRang(Guete.Auftrag ga, String station) {
+        int i = ga.wind().indexOf(station);
+        return i < 0 ? Integer.MAX_VALUE : i;
     }
 
     static double zahl(Object o) { return o instanceof Number n ? n.doubleValue() : Double.NaN; }
@@ -452,7 +675,8 @@ public final class Guetebau {
         int kopien = 0;
         for (File k : ga.kopien()) if (k.getParentFile() != null && k.getParentFile().isDirectory() && g.schreibe(k)) kopien++;
         long mit = g.eintraege.stream().filter(e -> e.kennzahlen().werte() > 0).count(), kw = g.eintraege.stream().filter(e -> e.kennzahlen().mitKennwert()).count();
-        return String.format(Locale.GERMAN, "Güte %s: %d Läufe, %d Reihen, %d mit Messung, %d mit HThw (%s)%s", neu ? "neu geschrieben" : "unverändert", g.laeufe.size(),
-                g.eintraege.size(), mit, kw, ga.datei().getName(), kopien > 0 ? ", " + kopien + (kopien == 1 ? " Kopie" : " Kopien") : "");
+        long wm = g.winde.stream().filter(w -> w.zahlen().werte() > 0).count();
+        return String.format(Locale.GERMAN, "Güte %s: %d Läufe, %d Reihen, %d mit Messung, %d mit HThw, %d Windstationen, %d mit Messung (%s)%s", neu ? "neu geschrieben" : "unverändert",
+                g.laeufe.size(), g.eintraege.size(), mit, kw, g.winde.size(), wm, ga.datei().getName(), kopien > 0 ? ", " + kopien + (kopien == 1 ? " Kopie" : " Kopien") : "");
     }
 }

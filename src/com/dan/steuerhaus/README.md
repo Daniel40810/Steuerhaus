@@ -319,3 +319,17 @@ java -cp dist\HalligHooge.jar com.dan.steuerhaus.messung.Sammler --manifest src\
 Manifest: `guete.name`, `guete.pegel`, `guete.umkreis`, `guete.einschwingen`, `guete.stau`, `guete.modell`, `guete.datei`,
 `guete.kopie`, `guete.ansicht`, `guete.hinweis`. Schema Stufe 3. Prüfung: `demo.MessungCheck` (12–15) und `demo.GueteCheck`
 (mit den echten Dateien, Bilder `DB3_Guete_*.png`).
+
+## Antrieb gegen Messung (DB4)
+
+Seit DB4 (Werkbuch HalligHooge 173, F272–F275 A) klärt das Messarchiv, woher die Abweichungen aus DB3 kommen.
+
+| Teil | Inhalt |
+|---|---|
+| `Guete` | dazu `Wind` (Station, Zelle, Geschwindigkeit und Richtung von Modell und Messung) und `Windzahlen` (Faktor, Windschub = Faktor², Bias, RMSE, Versatz der Richtung, dasselbe bei Sturm); in `Kennzahlen` Mittelwasser, Tidemittel und Bias ohne Mittelwasser; `Lauf.mittel()` aus dem Antrieb; Zeilen im Format von DB3 bleiben lesbar |
+| `ausgabe.Modellauszug` | der Wind des Archivs (`wind/`, u10, v10) an den Stationen `guete.wind` (Lage aus `gebiet/wind/wind.txt`); außerhalb des Gitters die nächste Zelle am Rand bis 10 km (Helgoland liegt 7,6 km von G2) |
+| `messung.Guetebau` | `HH_MODELL_WIND`, `HH_GUETE_WIND`; Messung auf 10 m (logarithmisches Profil, z0 = 0,2 mm); Faktor und Richtung ab `guete.wind.min`, Sturm ab `guete.wind.sturm`; Mittelwasser über `guete.mittelwasser.tage` Tage um die Mitte des Laufs, Tidemittel über 24 h 50 min; Bias ohne Mittelwasser = Bias + (Mittelwasser − Mittel im Antrieb) |
+| `guete.Gueteansicht` | Umschalter „Wasserstand \| Wind“; unter Wind Geschwindigkeit, Richtung und die Kennzahlen je Station; unter Wasserstand die Linien „Mittelwasser gemessen“ und „Mittel im Modell“ |
+
+Schema Stufe 4 (Sichten `HH_WIND_VERGLEICH_V`, `HH_TAGESMITTEL_V`, `HH_GUETE_WIND_V`). Prüfung: `demo.MessungCheck` (12–16)
+und `demo.GueteCheck` (8 Wind, 9 Mittelwasser; Bilder `DB4_Guete_*.png`).

@@ -28,7 +28,9 @@ import java.util.Map;
  * <li>{@code guete.datei}: was der Sammler daraus mit dem Messarchiv macht – dazu die Messung, die Paare und die Kennzahlen.
  *     Liegt neben dem Manifest (im Git und im Abbild), geschrieben nur bei Änderung; die App liest nur sie.</li>
  * </ol>
- * Zeiten UTC (ISO 8601, auf die Sekunde), Höhen in m NHN, Reihen in mm (ganze Zahlen, „-“ fehlt oder trocken). Nur java.*.
+ * Zeiten UTC (ISO 8601, auf die Sekunde), Höhen in m NHN, Reihen in Tausendsteln (ganze Zahlen, „-“ fehlt oder trocken):
+ * Wasserstand in mm, Wind in mm/s, Richtung in tausendstel Grad. Seit DB4 (Werkbuch HalligHooge 173, F272–F275 A) dazu der
+ * Wind des Modells (ERA5 aus dem Archiv) an den Windstationen gegen den DWD und je Pegel das gemessene Mittelwasser. Nur java.*.
  * <pre>
  * lauf.sturm             = Szenarien; Archiv; Name; Beginn; von; bis; Schritt; Kennung; Antrieb; Module
  * pegel.sturm.HUSUM      = Name; Ost; Nord; Gitter; Zelle; Abstand; Grund
@@ -37,7 +39,12 @@ import java.util.Map;
  * messung.sturm.HUSUM    = Beginn; Schritt; mm mm …
  * gemessen.sturm.HUSUM   = H … , N …
  * paare.sturm.HUSUM      = Modell Höhe Messung Höhe Gezeit Stau, …
- * kennzahlen.sturm.HUSUM = Werte; RMSE; Bias; Skill; r; HW; Zeit; Höhe; RMS; Stau-Paare; Stau-Anteil; Max; Zeit; HThw; Tag; am Tag; Zeit
+ * kennzahlen.sturm.HUSUM = Werte; RMSE; Bias; Skill; r; HW; Zeit; Höhe; RMS; Stau-Paare; Stau-Anteil; Max; Zeit; HThw; Tag; am Tag; Zeit;
+ *                          Mittelwasser; Tidemittel; Bias ohne Mittelwasser   (die letzten drei seit DB4)
+ * windpunkt.sturm.03032  = Name; Ost; Nord; Geber; Gitter; Zelle; Abstand      (seit DB4)
+ * wind.sturm.03032       = Beginn; Schritt; mm/s …      richtung.sturm.03032 = Beginn; Schritt; tausendstel Grad …
+ * windmessung.…, richtungmessung.…                     (DWD, auf 10 m gebracht)
+ * windzahlen.sturm.03032 = Werte; Faktor; Bias; RMSE; Richtung; Sturm-Werte; Faktor; Bias; Richtung; höchster Wind Modell; Messung
  * </pre>
  */
 public final class Guete {
@@ -46,6 +53,12 @@ public final class Guete {
     public record Lauf(String schluessel, List<String> szenarien, String archiv, String name, Instant beginn, Instant von, Instant bis, int schritt, String kennung,
             String antrieb, String module) {
         public Lauf mitKennung(String k) { return new Lauf(schluessel, szenarien, archiv, name, beginn, von, bis, schritt, k, antrieb, module); }
+
+        /** Seit DB4: das Mittel des Wasserstands im Antrieb (m NHN), aus „Mittel 0.0 m“ in {@link #antrieb}; 0, wenn es fehlt. */
+        public double mittel() {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("Mittel\\s+([-+]?[0-9]+(?:\\.[0-9]+)?)\\s*m").matcher(antrieb == null ? "" : antrieb);
+            return m.find() ? Double.parseDouble(m.group(1)) : 0;
+        }
     }
 
     /** Eine Reihe auf festem Schritt: Beginn, Schritt (s) und Werte (m NHN; NaN fehlt oder trocken). */
@@ -102,9 +115,17 @@ public final class Guete {
      * Tag und das höchste Hochwasser des Modells an diesem Tag (nur, wenn der Lauf den Tag abdeckt).
      */
     public record Kennzahlen(int werte, double rmse, double bias, double skill, double r, int hw, double hwZeit, double hwHoehe, double hwRms, int stauPaare,
-            double stauAnteil, double max, Instant maxZeit, double kennwert, LocalDate kennwertTag, double amTag, Instant amTagZeit) {
+            double stauAnteil, double max, Instant maxZeit, double kennwert, LocalDate kennwertTag, double amTag, Instant amTagZeit, double mittelwasser, double tidemittel,
+            double biasOhneMw) {
         public static final Kennzahlen LEER = new Kennzahlen(0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN,
-                Double.NaN, null, Double.NaN, null, Double.NaN, null);
+                Double.NaN, null, Double.NaN, null, Double.NaN, null, Double.NaN, Double.NaN, Double.NaN);
+
+        /** Wie bisher (DB3), ohne Mittelwasser. */
+        public Kennzahlen(int werte, double rmse, double bias, double skill, double r, int hw, double hwZeit, double hwHoehe, double hwRms, int stauPaare,
+                double stauAnteil, double max, Instant maxZeit, double kennwert, LocalDate kennwertTag, double amTag, Instant amTagZeit) {
+            this(werte, rmse, bias, skill, r, hw, hwZeit, hwHoehe, hwRms, stauPaare, stauAnteil, max, maxZeit, kennwert, kennwertTag, amTag, amTagZeit, Double.NaN, Double.NaN,
+                    Double.NaN);
+        }
 
         /** Ob der Lauf den Tag des HThw abdeckt und das Modell dort ein Hochwasser hat. */
         public boolean mitKennwert() { return !Double.isNaN(kennwert) && kennwertTag != null && !Double.isNaN(amTag); }
@@ -118,19 +139,66 @@ public final class Guete {
         }
     }
 
+    /**
+     * Seit DB4: die Kennzahlen des Winds an einer Station in einem Lauf. Werte (Paare zur selben Zeit); Faktor = Summe der
+     * Geschwindigkeit des Modells / Summe der gemessenen, über die Paare mit mindestens {@code guete.wind.min}; Bias und RMSE
+     * der Geschwindigkeit (m/s); Versatz der Richtung (Modell − Messung, Grad, Kreismittel gewichtet mit der gemessenen
+     * Geschwindigkeit, ab {@code guete.wind.min}); dasselbe nur bei Sturm (gemessen ab {@code guete.wind.sturm}); der höchste
+     * Wind beider. Der Windschub wächst mit dem Quadrat der Geschwindigkeit: {@link #schub()}.
+     */
+    public record Windzahlen(int werte, double faktor, double bias, double rmse, double richtung, int sturmWerte, double sturmFaktor, double sturmBias, double sturmRichtung,
+            double maxModell, double maxMessung) {
+        public static final Windzahlen LEER = new Windzahlen(0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+
+        /** Faktor², das Verhältnis des Windschubs. */
+        public double schub() { return faktor * faktor; }
+
+        public double sturmSchub() { return sturmFaktor * sturmFaktor; }
+    }
+
+    /**
+     * Seit DB4: eine Windstation in einem Lauf: Kennung beim DWD, Name, Lage, Höhe des Gebers, Zelle des Winds im Modell und
+     * ihr Abstand, Geschwindigkeit (m/s, 10 m) und Richtung (Grad, woher) des Modells und der Messung (auf 10 m gebracht).
+     */
+    public record Wind(String lauf, String station, String name, double ost, double nord, double geber, String gitter, int zelle, double abstand, Reihe ff, Reihe dd,
+            Reihe ffMessung, Reihe ddMessung, Windzahlen zahlen) {
+        public Wind mit(Reihe ffM, Reihe ddM, Windzahlen z) {
+            return new Wind(lauf, station, name, ost, nord, geber, gitter, zelle, abstand, ff, dd, ffM, ddM, z);
+        }
+    }
+
     public final String quelle;
     public final Instant erstellt;
     /** Stunden nach dem Beginn eines Laufs, die nicht zählen. */
     public final double einschwingen;
     public final List<Lauf> laeufe;
     public final List<Eintrag> eintraege;
+    /** Seit DB4: der Wind an den Stationen je Lauf. */
+    public final List<Wind> winde;
 
     public Guete(String quelle, Instant erstellt, double einschwingen, List<Lauf> laeufe, List<Eintrag> eintraege) {
+        this(quelle, erstellt, einschwingen, laeufe, eintraege, List.of());
+    }
+
+    public Guete(String quelle, Instant erstellt, double einschwingen, List<Lauf> laeufe, List<Eintrag> eintraege, List<Wind> winde) {
         this.quelle = quelle == null ? "" : quelle;
         this.erstellt = erstellt;
         this.einschwingen = einschwingen;
         this.laeufe = Collections.unmodifiableList(new ArrayList<>(laeufe));
         this.eintraege = Collections.unmodifiableList(new ArrayList<>(eintraege));
+        this.winde = Collections.unmodifiableList(new ArrayList<>(winde));
+    }
+
+    /** Seit DB4: die Windstationen eines Laufs in der Folge der Datei. */
+    public List<Wind> winde(String lauf) {
+        List<Wind> l = new ArrayList<>();
+        for (Wind w : winde) if (w.lauf().equals(lauf)) l.add(w);
+        return l;
+    }
+
+    public Wind wind(String lauf, String station) {
+        for (Wind w : winde) if (w.lauf().equals(lauf) && w.station().equals(station)) return w;
+        return null;
     }
 
     public Lauf lauf(String schluessel) {
@@ -164,7 +232,7 @@ public final class Guete {
      * Kopien (relativ zum Manifest), die Ansicht beim Sprung ins Szenario und der Hinweis unter dem Fenster.
      */
     public record Auftrag(String name, List<String> pegel, double umkreis, double einschwingen, double stau, File modell, File datei, List<File> kopien, String ansicht,
-            String hinweis) {
+            String hinweis, List<String> wind, double windMin, double windSturm, double mittelwasserTage) {
 
         /** Liest die Schlüssel; null, wenn {@code guete.datei} fehlt. */
         public static Auftrag lies(Manifest m) {
@@ -175,9 +243,12 @@ public final class Guete {
             List<File> k = new ArrayList<>();
             for (String s : m.text("guete.kopie", "").split(";")) if (!s.isBlank()) k.add(norm(m.relativ(s.strip())));
             String mo = m.text("guete.modell", "");
+            List<String> w = new ArrayList<>();
+            for (String s : m.text("guete.wind", "").split(";")) if (!s.isBlank()) w.add(s.strip());
             return new Auftrag(m.text("guete.name", "Modell gegen Messung"), List.copyOf(p), zahl(m.text("guete.umkreis", "500"), 500),
                     zahl(m.text("guete.einschwingen", m.text("gezeiten.einschwingen", "24")), 24), zahl(m.text("guete.stau", "0.5"), 0.5),
-                    mo.isEmpty() ? null : norm(m.relativ(mo)), norm(m.relativ(d)), List.copyOf(k), m.text("guete.ansicht", ""), m.text("guete.hinweis", ""));
+                    mo.isEmpty() ? null : norm(m.relativ(mo)), norm(m.relativ(d)), List.copyOf(k), m.text("guete.ansicht", ""), m.text("guete.hinweis", ""), List.copyOf(w),
+                    zahl(m.text("guete.wind.min", "5"), 5), zahl(m.text("guete.wind.sturm", "15"), 15), zahl(m.text("guete.mittelwasser.tage", "30"), 30));
         }
 
         static File norm(File f) { return f.toPath().toAbsolutePath().normalize().toFile(); }
@@ -219,7 +290,17 @@ public final class Guete {
     static String kennzahlen(Kennzahlen k) {
         return k.werte() + "; " + z(k.rmse()) + "; " + z(k.bias()) + "; " + z4(k.skill()) + "; " + z4(k.r()) + "; " + k.hw() + "; " + z1(k.hwZeit()) + "; " + z(k.hwHoehe()) + "; "
                 + z(k.hwRms()) + "; " + k.stauPaare() + "; " + z(k.stauAnteil()) + "; " + z(k.max()) + "; " + t(k.maxZeit()) + "; " + z(k.kennwert()) + "; "
-                + (k.kennwertTag() == null ? "" : k.kennwertTag().toString()) + "; " + z(k.amTag()) + "; " + t(k.amTagZeit());
+                + (k.kennwertTag() == null ? "" : k.kennwertTag().toString()) + "; " + z(k.amTag()) + "; " + t(k.amTagZeit()) + "; " + z(k.mittelwasser()) + "; "
+                + z(k.tidemittel()) + "; " + z(k.biasOhneMw());
+    }
+
+    static String windzahlen(Windzahlen k) {
+        return k.werte() + "; " + z(k.faktor()) + "; " + z(k.bias()) + "; " + z(k.rmse()) + "; " + z1(k.richtung()) + "; " + k.sturmWerte() + "; " + z(k.sturmFaktor()) + "; "
+                + z(k.sturmBias()) + "; " + z1(k.sturmRichtung()) + "; " + z(k.maxModell()) + "; " + z(k.maxMessung());
+    }
+
+    static String windpunktZeile(Wind w) {
+        return rein(w.name()) + "; " + z1(w.ost()) + "; " + z1(w.nord()) + "; " + z1(w.geber()) + "; " + rein(w.gitter()) + "; " + w.zelle() + "; " + z1(w.abstand());
     }
 
     static String laufZeile(Lauf l) {
@@ -232,16 +313,20 @@ public final class Guete {
     }
 
     /** Die Zeilen eines Laufs (ohne seine Kennung) – das, worüber die Kennung rechnet. */
-    static String laufInhalt(Lauf l, List<Eintrag> es) {
+    static String laufInhalt(Lauf l, List<Eintrag> es, List<Wind> ws) {
         StringBuilder s = new StringBuilder(laufZeile(l.mitKennung(""))).append('\n');
         for (Eintrag e : es) s.append(pegelZeile(e)).append('\n').append(reihe(e.modell())).append('\n').append(marken(e.marken())).append('\n');
+        for (Wind w : ws) s.append(windpunktZeile(w)).append('\n').append(reihe(w.ff())).append('\n').append(reihe(w.dd())).append('\n');
         return s.toString();
     }
 
     /** Die Kennung eines Laufs: SHA-256 (die ersten 16 Zeichen) über Kopf, Zellen, Reihen und Marken des Modells. */
-    public static String kennung(Lauf l, List<Eintrag> es) {
+    public static String kennung(Lauf l, List<Eintrag> es) { return kennung(l, es, List.of()); }
+
+    /** Seit DB4 mit dem Wind des Laufs. */
+    public static String kennung(Lauf l, List<Eintrag> es, List<Wind> ws) {
         try {
-            byte[] h = MessageDigest.getInstance("SHA-256").digest(laufInhalt(l, es).getBytes(StandardCharsets.UTF_8));
+            byte[] h = MessageDigest.getInstance("SHA-256").digest(laufInhalt(l, es, ws).getBytes(StandardCharsets.UTF_8));
             StringBuilder s = new StringBuilder();
             for (int i = 0; i < 8; i++) s.append(String.format("%02x", h[i]));
             return s.toString();
@@ -265,6 +350,15 @@ public final class Guete {
             if (!e.gemessen().isEmpty()) s.append("gemessen.").append(k).append(marken(e.gemessen())).append('\n');
             if (!e.paare().isEmpty()) s.append("paare.").append(k).append(paare(e.paare())).append('\n');
             if (e.kennzahlen() != Kennzahlen.LEER) s.append("kennzahlen.").append(k).append(kennzahlen(e.kennzahlen())).append('\n');
+        }
+        for (Wind w : winde) {
+            String k = w.lauf() + "." + w.station() + " = ";
+            s.append("windpunkt.").append(k).append(windpunktZeile(w)).append('\n');
+            s.append("wind.").append(k).append(reihe(w.ff())).append('\n');
+            s.append("richtung.").append(k).append(reihe(w.dd())).append('\n');
+            if (w.ffMessung().n() > 0) s.append("windmessung.").append(k).append(reihe(w.ffMessung())).append('\n');
+            if (w.ddMessung().n() > 0) s.append("richtungmessung.").append(k).append(reihe(w.ddMessung())).append('\n');
+            if (w.zahlen() != Windzahlen.LEER) s.append("windzahlen.").append(k).append(windzahlen(w.zahlen())).append('\n');
         }
         return s.toString();
     }
@@ -317,15 +411,24 @@ public final class Guete {
                 je.computeIfAbsent(schl, x -> new LinkedHashMap<>()).put(art, e.getValue());
             }
             List<Eintrag> es = new ArrayList<>();
+            List<Wind> ws = new ArrayList<>();
             for (Map.Entry<String, Map<String, String>> e : je.entrySet()) {
                 Map<String, String> v = e.getValue();
+                if (v.containsKey("windpunkt")) {
+                    int a = e.getKey().indexOf('.');
+                    String[] p = felder(v.get("windpunkt"), 7, "windpunkt." + e.getKey());
+                    ws.add(new Wind(e.getKey().substring(0, a), e.getKey().substring(a + 1), p[0], zahl(p[1]), zahl(p[2]), zahl(p[3]), p[4], Integer.parseInt(p[5]),
+                            zahl(p[6]), reihe(v.get("wind")), reihe(v.get("richtung")), reihe(v.get("windmessung")), reihe(v.get("richtungmessung")),
+                            windzahlen(v.get("windzahlen"))));
+                    continue;
+                }
                 if (!v.containsKey("pegel")) throw new IOException("pegel." + e.getKey() + " fehlt");
                 int a = e.getKey().indexOf('.');
                 String[] p = felder(v.get("pegel"), 7, "pegel." + e.getKey());
                 es.add(new Eintrag(e.getKey().substring(0, a), e.getKey().substring(a + 1), p[0], zahl(p[1]), zahl(p[2]), p[3], Integer.parseInt(p[4]), zahl(p[5]), zahl(p[6]),
                         reihe(v.get("modell")), marken(v.get("marken")), reihe(v.get("messung")), marken(v.get("gemessen")), paare(v.get("paare")), kennzahlen(v.get("kennzahlen"))));
             }
-            return new Guete(w.get("quelle"), zeit(w.get("erstellt")), zahl(w.getOrDefault("einschwingen", "24")), laeufe, es);
+            return new Guete(w.get("quelle"), zeit(w.get("erstellt")), zahl(w.getOrDefault("einschwingen", "24")), laeufe, es, ws);
         } catch (RuntimeException x) {
             throw new IOException(f.getName() + ": " + x.getMessage(), x);
         }
@@ -373,7 +476,15 @@ public final class Guete {
         if (v == null || v.isBlank()) return Kennzahlen.LEER;
         String[] t = felder(v, 17, "kennzahlen");
         return new Kennzahlen(Integer.parseInt(t[0]), zahl(t[1]), zahl(t[2]), zahl(t[3]), zahl(t[4]), Integer.parseInt(t[5]), zahl(t[6]), zahl(t[7]), zahl(t[8]),
-                Integer.parseInt(t[9]), zahl(t[10]), zahl(t[11]), zeit(t[12]), zahl(t[13]), t[14].isEmpty() ? null : LocalDate.parse(t[14]), zahl(t[15]), zeit(t[16]));
+                Integer.parseInt(t[9]), zahl(t[10]), zahl(t[11]), zeit(t[12]), zahl(t[13]), t[14].isEmpty() ? null : LocalDate.parse(t[14]), zahl(t[15]), zeit(t[16]),
+                t.length > 17 ? zahl(t[17]) : Double.NaN, t.length > 18 ? zahl(t[18]) : Double.NaN, t.length > 19 ? zahl(t[19]) : Double.NaN);
+    }
+
+    static Windzahlen windzahlen(String v) {
+        if (v == null || v.isBlank()) return Windzahlen.LEER;
+        String[] t = felder(v, 11, "windzahlen");
+        return new Windzahlen(Integer.parseInt(t[0]), zahl(t[1]), zahl(t[2]), zahl(t[3]), zahl(t[4]), Integer.parseInt(t[5]), zahl(t[6]), zahl(t[7]), zahl(t[8]), zahl(t[9]),
+                zahl(t[10]));
     }
 
     static Instant zeit(String s) { return s == null || s.isBlank() ? null : Instant.parse(s.strip()); }

@@ -30,12 +30,22 @@ import java.util.function.Consumer;
  * zählt erst, was {@code guete.einschwingen} Stunden nach dem Beginn des Laufs liegt. Dazu die Hoch- und Niedrigwasser
  * des Modells ({@link Pegelreihe#marken()}, Rückgang 0,1 m). Schreibt nach {@code guete.modell} (nur bei Änderung); der
  * Sammler ({@code Sammler --guete}) bringt es mit der Messung zusammen. Ohne Bühne, liest je Stand nur die Zelle.
+ * <p>
+ * Seit DB4 (Werkbuch HalligHooge 173): dazu der Wind des Modells ({@code wind/} des Archivs, ERA5 u10 und v10) an den
+ * Windstationen {@code guete.wind} (Kennung beim DWD, Lage aus {@code gebiet/wind/wind.txt}) in der Zelle am Ort; liegt die
+ * Station außerhalb des Gitters (Helgoland, rund 7 km südwestlich der Ecke von G2), gilt die nächste Zelle am Rand, bis
+ * {@link #WIND_RAND} m: ERA5 hat Zellen von 0,25° (rund 28 × 17 km), der Wind über See ändert sich auf 7 km kaum.
  */
 public final class Modellauszug {
     /** Höchster Abstand einer Zeit des Archivs zum Raster des Schritts (s) [G]. */
     static final long TOLERANZ = 30;
     /** Gültige Werte (m NHN) wie im Messarchiv (HH_MODELL_WERT_CK). */
     static final double UNTEN = -6, OBEN = 8;
+    /** Seit DB4: so weit (m) darf eine Windstation außerhalb des Gitters des Winds liegen [G] (kleiner als eine Zelle von ERA5). */
+    public static final double WIND_RAND = 10000;
+
+    /** Seit DB4: eine Windstation aus {@code gebiet/wind/wind.txt} (ohne die Reihen). */
+    public record Station(String name, String kennung, double laenge, double breite, double geber) { }
 
     private Modellauszug() { }
 
@@ -47,6 +57,8 @@ public final class Modellauszug {
         Map<String, Pegel> pg = Pegel.lies(gebiet);
         Gebiet ge = Gebiet.lies(gebiet);
         File daten = gebiet.getParentFile();
+        Map<String, Station> stationen = windstationen(gebiet);
+        for (String k : ga.wind()) if (!stationen.containsKey(k)) meldung.accept("Güte: Windstation " + k + " nicht in " + gebiet + "/wind/wind.txt – übergangen");
         // je Archiv einmal, in der Folge der Szenendatei
         Map<String, List<Szenario>> archive = new LinkedHashMap<>();
         Map<String, File> ordner = new LinkedHashMap<>();
@@ -62,6 +74,7 @@ public final class Modellauszug {
         }
         List<Guete.Lauf> laeufe = new ArrayList<>();
         List<Guete.Eintrag> alle = new ArrayList<>();
+        List<Guete.Wind> alleWinde = new ArrayList<>();
         for (Map.Entry<String, List<Szenario>> a : archive.entrySet()) {
             long n0 = System.nanoTime();
             File ar = ordner.get(a.getKey());
@@ -106,21 +119,47 @@ public final class Modellauszug {
                     es.add(e);
                     z.append(String.format(Locale.GERMAN, " %s %d/%d", Chronikbau.name(p), e.modell().belegt(), e.modell().n()));
                 }
+                // seit DB4: der Wind an den Stationen
+                List<Guete.Wind> ws = new ArrayList<>();
+                com.dan.core.gitter.Gitter wg = q.windGitter();
+                if (wg == null) meldung.accept("Güte: " + laufSchl + " ohne Wind im Archiv");
+                else for (String k : ga.wind()) {
+                    Station st = stationen.get(k);
+                    if (st == null) continue;
+                    double[] u = Utm.vorwaerts(st.laenge(), st.breite(), 32);
+                    int c = zelle(wg, u[0], u[1], st.laenge(), st.breite());
+                    if (c < 0) {
+                        meldung.accept(String.format(Locale.GERMAN, "Güte: %s · Wind %s liegt mehr als %.0f m außerhalb von %s – übergangen", laufSchl, st.name(), WIND_RAND, wg.name));
+                        continue;
+                    }
+                    double[] zt2 = q.zeiten();
+                    double[] uu = new double[zt2.length], vv = new double[zt2.length];
+                    float[] uv = new float[2];
+                    for (int i = 0; i < zt2.length; i++) {
+                        if (q.windZelle(zt2[i], c, uv)) { uu[i] = uv[0]; vv[i] = uv[1]; }
+                        else { uu[i] = Double.NaN; vv[i] = Double.NaN; }
+                    }
+                    Guete.Wind w = wind(laufSchl, st, u[0], u[1], wg, c, zt2, uu, vv, q.start, von, bis, schritt);
+                    ws.add(w);
+                    z.append(String.format(Locale.GERMAN, " Wind %s %d/%d", st.name(), w.ff().belegt(), w.ff().n()));
+                }
                 String archiv = relativ(daten, ar);
                 Guete.Lauf l = new Guete.Lauf(laufSchl, namen, Guete.rein(archiv), Guete.rein(q.kopf.name), q.start, von, bis, schritt, "",
                         Guete.rein(q.kopf.antrieb.toString().replaceAll("^\\{|\\}$", "")), Guete.rein(q.kopf.module.toString().replaceAll("^\\{|\\}$", "")));
-                l = l.mitKennung(Guete.kennung(l, es));
+                l = l.mitKennung(Guete.kennung(l, es, ws));
                 laeufe.add(l);
                 alle.addAll(es);
+                alleWinde.addAll(ws);
                 meldung.accept(String.format(Locale.GERMAN, "Güte: %s (%s) %s bis %s, %d Stände je %d s, Pegel (Werte/Stände):%s; %.1f s", laufSchl, String.join(", ", namen), von, bis,
                         es.isEmpty() ? 0 : es.get(0).modell().n(), schritt, z, (System.nanoTime() - n0) / 1e9));
             }
         }
         if (laeufe.isEmpty()) throw new IllegalStateException("Güte: kein Archiv mit Ständen nach dem Einschwingen");
         Guete g = new Guete("Modell der App (Archive der Szenarien, " + ga.pegel().size() + " Pegel, tiefste Zelle im Umkreis von " + Math.round(ga.umkreis()) + " m)", Instant.now(),
-                ga.einschwingen(), laeufe, alle);
+                ga.einschwingen(), laeufe, alle, alleWinde);
         boolean neu = g.schreibe(ga.modell());
-        meldung.accept("Güte: " + laeufe.size() + " Läufe, " + alle.size() + " Reihen → " + ga.modell() + (neu ? " (neu geschrieben)" : " (unverändert)"));
+        meldung.accept("Güte: " + laeufe.size() + " Läufe, " + alle.size() + " Reihen des Wasserstands, " + alleWinde.size() + " des Winds → " + ga.modell()
+                + (neu ? " (neu geschrieben)" : " (unverändert)"));
         return g;
     }
 
@@ -165,6 +204,59 @@ public final class Modellauszug {
         double abstand = Math.hypot(g.x(ci) - ost, g.y(cj) - nord);
         return new Guete.Eintrag(lauf, pegel, name, ost, nord, g.name, zelle, abstand, grund, new Guete.Reihe(von, schritt, w), marken, Guete.Reihe.LEER, List.of(), List.of(),
                 Guete.Kennzahlen.LEER);
+    }
+
+    /** Seit DB4: die Windstationen aus {@code gebiet/wind/wind.txt} nach Kennung (nur der Kopf, ohne die Reihen). */
+    public static Map<String, Station> windstationen(File gebiet) throws java.io.IOException {
+        Map<String, Station> m = new LinkedHashMap<>();
+        File t = new File(new File(gebiet, "wind"), "wind.txt");
+        if (!t.isFile()) return m;
+        for (String z : java.nio.file.Files.readAllLines(t.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
+            if (!z.startsWith("station ")) continue;
+            String[] s = z.trim().split("\\s+", 8);
+            m.put(s[2], new Station(s[1], s[2], Double.parseDouble(s[3]), Double.parseDouble(s[4]), Double.parseDouble(s[6])));
+        }
+        return m;
+    }
+
+    /**
+     * Seit DB4: die Zelle eines Orts im Gitter des Winds; außerhalb die nächste Zelle am Rand, wenn sie höchstens
+     * {@link #WIND_RAND} m entfernt ist, sonst -1. Ein Gitter in Grad nimmt Länge und Breite (ohne Grenze am Rand).
+     */
+    public static int zelle(Gitter g, double ost, double nord, double laenge, double breite) {
+        boolean utm = g.lage == Gitter.Lage.UTM;
+        double x = utm ? ost : laenge, y = utm ? nord : breite;
+        int i = Math.max(0, Math.min(g.nx - 1, g.i(x))), j = Math.max(0, Math.min(g.ny - 1, g.j(y)));
+        if (utm && !g.enthaelt(x, y) && Math.hypot(g.x(i) - x, g.y(j) - y) > WIND_RAND) return -1;
+        return i + g.nx * j;
+    }
+
+    /** Seit DB4: Richtung, aus der der Wind kommt (Grad, 0 Nord, 90 Ost), aus u (nach Osten) und v (nach Norden). */
+    public static double richtung(double u, double v) {
+        double d = (Math.toDegrees(Math.atan2(-u, -v)) + 360) % 360;
+        return d >= 359.9995 ? 0 : d;
+    }
+
+    /** Seit DB4: der Wind einer Station auf dem Raster wie das Wasser (öffentlich für die Prüfung ohne Archiv). */
+    public static Guete.Wind wind(String lauf, Station st, double ost, double nord, Gitter g, int zelle, double[] t, double[] u, double[] v, Instant start, Instant von,
+            Instant bis, int schritt) {
+        int n = (int) ((bis.getEpochSecond() - von.getEpochSecond()) / schritt) + 1;
+        float[] ff = new float[Math.max(0, n)], dd = new float[Math.max(0, n)];
+        Arrays.fill(ff, Float.NaN);
+        Arrays.fill(dd, Float.NaN);
+        for (int i = 0; i < t.length; i++) {
+            long s = start.getEpochSecond() + Math.round(t[i]) - von.getEpochSecond();
+            if (s < -TOLERANZ) continue;
+            long k = Math.round(s / (double) schritt);
+            if (k < 0 || k >= n || Math.abs(s - k * schritt) > TOLERANZ || Double.isNaN(u[i]) || Double.isNaN(v[i])) continue;
+            ff[(int) k] = (float) Math.hypot(u[i], v[i]);
+            dd[(int) k] = (float) richtung(u[i], v[i]);
+        }
+        boolean utm = g.lage == Gitter.Lage.UTM;
+        int ci = zelle % g.nx, cj = zelle / g.nx;
+        double abstand = utm ? Math.hypot(g.x(ci) - ost, g.y(cj) - nord) : Double.NaN;
+        return new Guete.Wind(lauf, st.kennung(), st.name(), ost, nord, st.geber(), g.name, zelle, abstand, new Guete.Reihe(von, schritt, ff), new Guete.Reihe(von, schritt, dd),
+                Guete.Reihe.LEER, Guete.Reihe.LEER, Guete.Windzahlen.LEER);
     }
 
     /** Der Pfad des Archivs relativ zum Ordner der Daten (sonst absolut). */

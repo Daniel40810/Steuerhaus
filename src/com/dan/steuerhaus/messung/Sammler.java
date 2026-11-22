@@ -259,7 +259,7 @@ public final class Sammler {
         String p = a.praefix();
         Einrichter e = new Einrichter();
         e.praefix = p;
-        e.version = 3;                                                              // seit DB3 (2: DB2)
+        e.version = 4;                                                              // seit DB4 (3: DB3, 2: DB2)
         e.sichten = a.sichten().toArray(String[]::new);
         e.metadaten = new String[] {p + "STATION.LAGE", p + "ORT.LAGE"};
         e.srid = a.srid();
@@ -276,7 +276,9 @@ public final class Sammler {
                 new Einrichter.Soll("Läufe des Modells (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "LAUF", -1),
                 new Einrichter.Soll("Pegel mit HThw (seit DB3)", "SELECT TO_CHAR(COUNT(HTHW)) FROM " + p + "STATION", -1),
                 new Einrichter.Soll("Werte Modell gegen Messung (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "VERGLEICH_V", -1),
-                new Einrichter.Soll("Paare der Scheitel (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "SCHEITEL_PAAR_V", -1));
+                new Einrichter.Soll("Paare der Scheitel (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "SCHEITEL_PAAR_V", -1),
+                new Einrichter.Soll("Wind Modell gegen Messung (seit DB4)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "WIND_VERGLEICH_V", -1),
+                new Einrichter.Soll("Tagesmittel der Pegel (seit DB4)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "TAGESMITTEL_V", -1));
         return e;
     }
 
@@ -568,8 +570,9 @@ public final class Sammler {
             Messarchiv ar = new Messarchiv(c, a.praefix(), a.srid());
             Guetebau.Bilanz b = Guetebau.einlesen(ar, mo, log::zeile);
             log.zeile("Güte: " + b.kurz());
-            int n = Guetebau.rechnen(ar, guete.stau(), zone);
-            log.zeile("Güte: Kennzahlen für " + n + " Pegel in den Läufen gerechnet");
+            int n = Guetebau.rechnen(ar, guete.stau(), zone, guete.mittelwasserTage());
+            int nw = Guetebau.rechnenWind(ar, guete.windMin(), guete.windSturm());                          // seit DB4
+            log.zeile("Güte: Kennzahlen für " + n + " Pegel und " + nw + " Windstationen in den Läufen gerechnet");
             String quelle = "Messarchiv " + a.schema() + ": " + mo.quelle + "; Messung von PEGELONLINE (WSV, DL-DE Zero 2.0, ungeprüfte Rohdaten), Mittel über 10 Minuten, "
                     + "Hoch- und Niedrigwasser aus der Scheitelsuche; HThw aus den Kennwerten von PEGELONLINE";
             com.dan.steuerhaus.Guete g = Guetebau.aus(ar, guete, quelle, zone);
@@ -718,8 +721,12 @@ public final class Sammler {
             abschnitt(ar, "Lücken über 60 min in den Minutenwerten (Pegel · Lücken · längste in min)",
                     "SELECT s.SCHLUESSEL, COUNT(*), ROUND(MAX(l.D)) FROM (SELECT STATION_ID, (ZEIT - LAG(ZEIT) OVER (PARTITION BY STATION_ID ORDER BY ZEIT)) * 1440 D FROM "
                             + p + "ROH) l JOIN " + p + "STATION s ON s.STATION_ID = l.STATION_ID WHERE l.D > 60 GROUP BY s.SCHLUESSEL ORDER BY 3 DESC", 30);
-            abschnitt(ar, "Modell gegen Messung (Lauf · Pegel · Werte · RMSE · Bias · Skill · HW · Versatz min · m · Windstau-Anteil · gegen HThw)",
-                    "SELECT LAUF, SCHLUESSEL, WERTE, RMSE, BIAS, SKILL, HW, HW_ZEIT, HW_HOEHE, STAU_ANTEIL, GEGEN_HTHW FROM " + p + "GUETE_V ORDER BY VON, LAUF, SCHLUESSEL", 80);
+            abschnitt(ar, "Modell gegen Messung (Lauf · Pegel · Werte · RMSE · Bias · Mittelwasser · Bias ohne MW · Skill · HW · Versatz min · m · Windstau-Anteil · gegen HThw)",
+                    "SELECT LAUF, SCHLUESSEL, WERTE, RMSE, BIAS, MITTELWASSER, BIAS_OHNE_MW, SKILL, HW, HW_ZEIT, HW_HOEHE, STAU_ANTEIL, GEGEN_HTHW FROM " + p
+                            + "GUETE_V ORDER BY VON, LAUF, SCHLUESSEL", 80);
+            abschnitt(ar, "Wind Modell gegen Messung (Lauf · Station · Werte · Faktor · Schub · Bias m/s · RMSE · Richtung ° · Sturm: Werte · Faktor · Schub · Richtung)",
+                    "SELECT LAUF, NAME, WERTE, FAKTOR, ROUND(SCHUB, 3), BIAS, RMSE, RICHTUNG, STURM_WERTE, STURM_FAKTOR, ROUND(STURM_SCHUB, 3), STURM_RICHTUNG FROM " + p
+                            + "GUETE_WIND_V ORDER BY VON, LAUF, SCHLUESSEL", 30);
             Aufbewahrung.Plan pl = Aufbewahrung.plan(ar.faecher("ROH", 1), ar.faecher("MITTEL", 12), LocalDate.now(ZoneOffset.UTC), a.rohMonate(), platz, a.grenzeMb());
             log.zeile("Nächste Pflege: " + (pl.leer() ? "nichts wegzunehmen" : String.join("; ", pl.gruende())));
         }

@@ -811,7 +811,7 @@ public final class Szenenapp {
         com.dan.steuerhaus.Guete.Auftrag gub = com.dan.steuerhaus.Guete.Auftrag.lies(manifest);
         if (gub != null)
             b.neu("labor.guete", "Labor", gub.name() + " …", "ctrl shift M", this::gueteZeigen)
-                    .hilfe("Der Wasserstand des Modells an den Pegeln gegen die Messung von PEGELONLINE, je Lauf der Szenarien: Kurven, Hoch- und Niedrigwasser, RMSE, Bias, Skill; bei Xaver das höchste Tidehochwasser (HThw).");
+                    .hilfe("Der Wasserstand des Modells an den Pegeln gegen die Messung von PEGELONLINE, je Lauf der Szenarien: Kurven, Hoch- und Niedrigwasser, RMSE, Bias, Skill, Mittelwasser; bei Xaver das höchste Tidehochwasser (HThw). Seit DB4 auch der Wind (ERA5 gegen DWD an List und Helgoland).");
         // seit Z1 (Werkbuch HalligHooge 155): der Begleiter – Tidenkalender
         if (gezeitenAuftrag != null)
             b.neu("begleiter.kalender", "Begleiter", gezeitenAuftrag.name() + " …", "ctrl shift T", this::kalenderZeigen)
@@ -2702,8 +2702,9 @@ public final class Szenenapp {
             else szeneZeigen(sz, an, t);
             if (hf.fenster != null) hf.fenster.toFront();
         });
+        gueteFenster.ansicht.windSturm = ga.windSturm();                                   // seit DB4
         gueteFenster.oeffne();
-        protokoll.schreibe("Güte", g.laeufe.size() + " Läufe, " + g.eintraege.size() + " Reihen");
+        protokoll.schreibe("Güte", g.laeufe.size() + " Läufe, " + g.eintraege.size() + " Reihen, " + g.winde.size() + " Windstationen");
     }
 
     /** Menü und Kachel: öffnet die Uhr; fehlen die Konstanten, rechnet sie der Kalender (wie dort). */

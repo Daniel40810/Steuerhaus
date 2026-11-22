@@ -26,7 +26,11 @@ import java.util.Map;
  * Kennzahlen in ihrem Wertebereich (Skill 0 … 1, |Bias| und RMSE unter 1 m – eine Plausibilität, keine Güte; die Güte
  * selbst ist Auskunft); 4 Xaver mit dem HThw an allen Pegeln und dem Hochwasser des Modells an dem Tag; 5 die Ansicht ohne
  * Fenster in beiden Themen ({@code DB3_Guete_<Thema>.png}, dazu {@code DB3_Guete_Xaver.png}) mit dem Knopf ins Szenario;
- * 6 der Eintrag im Menü; 7 die Kopie im Abbild gleich der Datei.
+ * 6 der Eintrag im Menü; 7 die Kopie im Abbild gleich der Datei. Seit DB4 (Werkbuch HalligHooge 173): 8 der Wind an den
+ * Stationen {@code guete.wind} in jedem Lauf (Modell zu mindestens 90 % belegt, Zelle bis 10 km), mit Messung in den Läufen
+ * ab 2010, Faktor 0,5 … 1,5 und Richtung unter 60° (Plausibilität; Faktor und Windschub sind Auskunft); 9 das Mittelwasser
+ * in den Läufen im Oktober 2026 an jedem Pegel (−0,5 … 0,8 m NHN) mit dem Bias ohne Mittelwasser. Bilder seit DB4
+ * {@code DB4_Guete_<Thema>.png}, {@code DB4_Guete_Xaver.png}, {@code DB4_Guete_Wind.png}.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.GueteCheck --manifest src\szenen\Hooge.steuerhaus --bilder docs\status
  * </pre>
@@ -58,7 +62,7 @@ public final class GueteCheck {
         if (manifest == null) throw new IllegalArgumentException("--manifest fehlt");
         Manifest m = Manifest.lies(manifest);
         ZoneId zone = ZoneId.of(m.text("app.zone", "Europe/Berlin"));
-        System.out.println("GueteCheck (DB3): " + manifest);
+        System.out.println("GueteCheck (DB3, DB4): " + manifest);
         Guete.Auftrag ga = Guete.Auftrag.lies(m);
         if (ga == null) {
             pruefe(false, "Prüfstein 1: Schlüssel guete.*", "guete.datei fehlt");
@@ -154,8 +158,9 @@ public final class GueteCheck {
         if (erst == null) erst = g.laeufe.get(0).schluessel();
         final String lauf = erst, pegel = ga.pegel().get(0);
         Instant[] sprung = new Instant[1];
+        String wst = ga.wind().isEmpty() ? null : ga.wind().get(0);
         for (Thema th : Thema.values()) {
-            BufferedImage[] bi = new BufferedImage[2];
+            BufferedImage[] bi = new BufferedImage[3];
             String[] knopf = new String[1];
             SwingUtilities.invokeAndWait(() -> {
                 try {
@@ -166,6 +171,9 @@ public final class GueteCheck {
                     a.knopf().doClick(0);
                     knopf[0] = a.knopf().getText();
                     if (xl != null && th == Thema.NAUTIK && a.waehle(xl.schluessel(), pegel)) bi[1] = a.alsBild(1320, 940);
+                    a.windSturm = ga.windSturm();
+                    if (wst != null && th == Thema.NAUTIK && a.waehleWind(lauf, wst)) bi[2] = a.alsBild(1320, 940);
+                    else if (wst != null && th == Thema.NAUTIK) f5.add("Wind " + lauf + "/" + wst + " nicht wählbar");
                 } catch (Exception x) {
                     f5.add(th.name + ": " + x);
                 }
@@ -173,15 +181,16 @@ public final class GueteCheck {
             if (bi[0] == null) f5.add(th.name + ": kein Bild");
             else if (bilder != null) {
                 bilder.mkdirs();
-                ImageIO.write(bi[0], "png", new File(bilder, "DB3_Guete_" + th.name + ".png"));
-                if (bi[1] != null) ImageIO.write(bi[1], "png", new File(bilder, "DB3_Guete_Xaver.png"));
+                ImageIO.write(bi[0], "png", new File(bilder, "DB4_Guete_" + th.name + ".png"));
+                if (bi[1] != null) ImageIO.write(bi[1], "png", new File(bilder, "DB4_Guete_Xaver.png"));
+                if (bi[2] != null) ImageIO.write(bi[2], "png", new File(bilder, "DB4_Guete_Wind.png"));
             }
             Guete.Lauf l = g.lauf(lauf);
             if (sprung[0] == null || sprung[0].isBefore(l.von()) || sprung[0].isAfter(l.bis())) f5.add(th.name + ": Sprung " + sprung[0] + " (" + knopf[0] + ")");
         }
         Thema.LABOR.anwenden();
         pruefe(f5.isEmpty(), "Prüfstein 5: Ansicht ohne Fenster in beiden Themen, der Knopf springt in die Zeit des Laufs", f5.isEmpty() ? lauf + "/" + pegel + " → " + sprung[0]
-                + ", DB3_Guete_*.png" : f5.toString());
+                + ", DB4_Guete_*.png" : f5.toString());
         // 6 Menü
         var bf = com.dan.steuerhaus.buehne.Szenenapp.befehleOhneFenster(m, sz).finde("labor.guete");
         pruefe(bf != null && "ctrl shift M".equals(bf.taste), "Prüfstein 6: Menü Labor › Modell gegen Messung (Strg Umschalt M)", bf == null ? "fehlt" : bf.name + ", " + bf.taste);
@@ -192,7 +201,69 @@ public final class GueteCheck {
                 pruefe(kf.isFile() && Guete.lies(kf).inhalt().equals(g.inhalt()), "Prüfstein 7: Kopie im Abbild gleich der Datei", kf.isFile() ? kf.toString() : kf + " fehlt");
             else info("Prüfstein 7", "kein Abbild (" + kf.getParentFile() + ")");
         }
+        wind(g, ga, zone);
+        mittelwasser(g, zone);
         ende();
+    }
+
+    /** Seit DB4: Prüfstein 8, der Wind an den Stationen. */
+    static void wind(Guete g, Guete.Auftrag ga, ZoneId zone) {
+        List<String> f = new ArrayList<>();
+        StringBuilder z = new StringBuilder();
+        for (Guete.Lauf l : g.laeufe) {
+            boolean messbar = l.von().atZone(zone).getYear() >= 2010;
+            double fs = 0;
+            int nf = 0;
+            for (String k : ga.wind()) {
+                Guete.Wind w = g.wind(l.schluessel(), k);
+                if (w == null) { f.add(l.schluessel() + " ohne Wind " + k); continue; }
+                if (w.ff().n() == 0 || w.ff().belegt() < 0.9 * w.ff().n()) f.add(l.schluessel() + "/" + w.name() + ": Modell " + w.ff().belegt() + " von " + w.ff().n());
+                if (!(w.abstand() <= com.dan.steuerhaus.ausgabe.Modellauszug.WIND_RAND)) f.add(l.schluessel() + "/" + w.name() + f(": Zelle %.0f m entfernt", w.abstand()));
+                Guete.Windzahlen k2 = w.zahlen();
+                if (messbar && k2.werte() == 0) f.add(l.schluessel() + "/" + w.name() + ": keine Messung");
+                // ohne gemessenen Wind ab guete.wind.min (ruhige Tage) gibt es keinen Faktor und keine Richtung: das ist kein Fehler
+                if (k2.werte() > 0 && (!Double.isNaN(k2.faktor()) && !(k2.faktor() >= 0.5 && k2.faktor() <= 1.5)
+                        || !Double.isNaN(k2.richtung()) && !(Math.abs(k2.richtung()) < 60)))
+                    f.add(l.schluessel() + "/" + w.name() + f(": Faktor %.2f, Richtung %+.0f°", k2.faktor(), k2.richtung()));
+                if (k2.werte() > 0 && Double.isNaN(k2.faktor()))
+                    info("Wind " + l.schluessel() + " " + w.name(), f("%d Werte, gemessen nie ab %.0f m/s (ruhig): Bias %+.1f m/s, RMSE %.1f m/s, höchster Wind Modell %.1f, gemessen %.1f m/s",
+                            k2.werte(), ga.windMin(), k2.bias(), k2.rmse(), k2.maxModell(), k2.maxMessung()));
+                else if (k2.werte() > 0) {
+                    info("Wind " + l.schluessel() + " " + w.name(), f("%d Werte, Faktor %.2f (Windschub %.0f %%), Bias %+.1f m/s, RMSE %.1f m/s, Richtung %+.0f°; bei Sturm %d Werte, Faktor %.2f "
+                            + "(Schub %.0f %%); höchster Wind Modell %.1f, gemessen %.1f m/s; Zelle %.1f km entfernt", k2.werte(), k2.faktor(), 100 * k2.schub(), k2.bias(), k2.rmse(),
+                            k2.richtung(), k2.sturmWerte(), k2.sturmFaktor(), 100 * k2.sturmSchub(), k2.maxModell(), k2.maxMessung(), w.abstand() / 1000));
+                    if (!Double.isNaN(k2.faktor())) { fs += k2.faktor(); nf++; }
+                }
+            }
+            if (nf > 0) z.append(z.length() > 0 ? "; " : "").append(l.schluessel()).append(f(" %.2f", fs / nf));
+        }
+        pruefe(f.isEmpty(), "Prüfstein 8: Wind an den Stationen in jedem Lauf (Modell ≥ 90 %, Zelle bis 10 km), mit Messung ab 2010, Faktor 0,5 … 1,5 und Richtung unter 60°, wo es Wind ab 5 m/s gab (Plausibilität)",
+                f.isEmpty() ? g.winde.size() + " Reihen; Faktor im Mittel: " + z : f.subList(0, Math.min(8, f.size())).toString());
+    }
+
+    /** Seit DB4: Prüfstein 9, das Mittelwasser an den Pegeln. */
+    static void mittelwasser(Guete g, ZoneId zone) {
+        List<String> f = new ArrayList<>();
+        StringBuilder z = new StringBuilder();
+        for (Guete.Lauf l : g.laeufe) {
+            if (l.von().atZone(zone).getYear() < 2026) continue;
+            double b = 0, mw = 0, o = 0;
+            int n = 0;
+            for (Guete.Eintrag e : g.eintraege(l.schluessel())) {
+                Guete.Kennzahlen k = e.kennzahlen();
+                if (k.werte() == 0) continue;
+                if (!(k.mittelwasser() >= -0.5 && k.mittelwasser() <= 0.8) || Double.isNaN(k.biasOhneMw()))
+                    f.add(l.schluessel() + "/" + e.pegel() + f(": Mittelwasser %.3f, ohne %.3f", k.mittelwasser(), k.biasOhneMw()));
+                else { b += k.bias(); mw += k.mittelwasser(); o += k.biasOhneMw(); n++; }
+            }
+            if (n > 0) {
+                String s = f("Bias %+.0f cm, Mittelwasser %+.2f m, Mittel im Modell %+.2f m, Bias ohne Mittelwasser %+.0f cm", 100 * b / n, mw / n, l.mittel(), 100 * o / n);
+                info("Mittelwasser " + l.schluessel() + " (Mittel über " + n + " Pegel)", s);
+                z.append(z.length() > 0 ? "; " : "").append(l.schluessel()).append(f(" %+.0f → %+.0f cm", 100 * b / n, 100 * o / n));
+            }
+        }
+        pruefe(f.isEmpty() && z.length() > 0, "Prüfstein 9: Mittelwasser an jedem Pegel der Läufe im Oktober 2026 (−0,5 … 0,8 m NHN) und der Bias ohne Mittelwasser",
+                f.isEmpty() ? "Bias → ohne Mittelwasser: " + z : f.subList(0, Math.min(8, f.size())).toString());
     }
 
     static void ende() {

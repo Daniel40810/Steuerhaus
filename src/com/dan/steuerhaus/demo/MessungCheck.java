@@ -38,7 +38,9 @@ import java.util.zip.ZipOutputStream;
  * HalligHooge 169): 8 die Datei der Chronik (hin und zurück, unverändert schreibt nicht), 9 die Ereignisse am Ort und die
  * Sturmfluten über alle Pegel, 10 die Liste der historischen Dateien des DWD, 11 die Abdeckung eines Archivs. Seit DB3
  * (Werkbuch HalligHooge 171): 12 die Datei Modell gegen Messung (hin und zurück, Kennung), 13 die Kennzahlen an einem
- * Handbeispiel, 14 das Raster des Modells und der Messung, 15 die Schlüssel {@code guete.*}.
+ * Handbeispiel, 14 das Raster des Modells und der Messung, 15 die Schlüssel {@code guete.*}. Seit DB4 (Werkbuch HalligHooge
+ * 173): 12 mit Wind und Mittelwasser (und einer Zeile im Format von DB3), 13 mit dem Bias ohne Mittelwasser, 14 mit dem Wind
+ * (Richtung, Zelle am Rand), 15 mit den Windstationen, 16 die Kennzahlen des Winds an einem Handbeispiel.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.MessungCheck --manifest src\szenen\Hooge.steuerhaus [--gebiet daten\gebiet] [--quellen ..\Steuerhaus\src]
  * </pre>
@@ -67,7 +69,7 @@ public final class MessungCheck {
         if (manifest == null) throw new IllegalArgumentException("--manifest fehlt");
         Manifest m = Manifest.lies(manifest);
         Messauftrag a = Messauftrag.lies(m);
-        System.out.println("MessungCheck (DB1, DB2, DB3): " + manifest);
+        System.out.println("MessungCheck (DB1 bis DB4): " + manifest);
         // 6 Schlüssel
         List<String> f6 = new ArrayList<>();
         if (a == null) f6.add("messung.db fehlt");
@@ -96,6 +98,7 @@ public final class MessungCheck {
         gueteKennzahlen();
         gueteRaster();
         gueteSchluessel(m);
+        windzahlen();
         if (quellen != null) {
             int v0 = SteuerhausCheck.verstoesse;
             SteuerhausCheck.importregel(quellen);
@@ -211,10 +214,15 @@ public final class MessungCheck {
         l = l.mitKennung(com.dan.steuerhaus.Guete.kennung(l, List.of(e)));
         var g = new com.dan.steuerhaus.Guete("Probe", Instant.parse("2026-11-22T18:00:00Z"), 24, List.of(l), List.of(e));
         var k = new com.dan.steuerhaus.Guete.Kennzahlen(7, 0.12, -0.05, 0.9876, 0.9912, 1, 15.0, -0.2, 0.2, 1, 0.8, 2.5, von.plusSeconds(900), 4.293, LocalDate.of(2013, 12, 6), 3.752,
-                von.plusSeconds(1800));
+                von.plusSeconds(1800), 0.131, 0.45, 0.081);
         var p = new com.dan.steuerhaus.Guete.Paar(von.plusSeconds(900), 1.5, von.plusSeconds(0), 1.7, 0.6, 1.1);
         var mess = new com.dan.steuerhaus.Guete.Reihe(von.plusSeconds(300), 600, new float[] {0.1f, Float.NaN, -0.25f});
-        return new com.dan.steuerhaus.Guete(g.quelle, g.erstellt, g.einschwingen, g.laeufe, List.of(e.mit(mess, List.of(new com.dan.steuerhaus.Guete.Marke('H', von, 1.7)), List.of(p), k)));
+        var wi = new com.dan.steuerhaus.Guete.Wind("sturm", "03032", "List", 462429.0, 6096173.3, 10, "G2", 157422, 102.1, new com.dan.steuerhaus.Guete.Reihe(von, 300,
+                new float[] {14.2f, 15.1f, Float.NaN}), new com.dan.steuerhaus.Guete.Reihe(von, 300, new float[] {250f, 359.5f, Float.NaN}), new com.dan.steuerhaus.Guete.Reihe(
+                von.plusSeconds(300), 600, new float[] {16.4f}), new com.dan.steuerhaus.Guete.Reihe(von.plusSeconds(300), 600, new float[] {245f}),
+                new com.dan.steuerhaus.Guete.Windzahlen(108, 0.89, -1.8, 2.0, 8.2, 94, 0.88, -2.0, 7.9, 16.0, 19.7));
+        return new com.dan.steuerhaus.Guete(g.quelle, g.erstellt, g.einschwingen, g.laeufe, List.of(e.mit(mess, List.of(new com.dan.steuerhaus.Guete.Marke('H', von, 1.7)), List.of(p), k)),
+                List.of(wi));
     }
 
     static void gueteDatei() throws Exception {
@@ -235,12 +243,26 @@ public final class MessungCheck {
         }
         if (!r1.laeufe.get(0).name().equals("Probe, mit - und Semikolon") || !r1.laeufe.get(0).szenarien().equals(List.of("sturm", "seegang"))) f.add("Lauf " + r1.laeufe.get(0));
         if (r1.laufVon("seegang") == null || r1.laufVon("ruhig") != null) f.add("laufVon");
+        // seit DB4: Wind und Mittelwasser
+        var w = r1.wind("sturm", "03032");
+        if (w == null || r1.winde("sturm").size() != 1) f.add("Wind fehlt");
+        else {
+            if (Math.abs(w.dd().wert(1) - 359.5) > 1e-6 || !Float.isNaN(w.ff().werte()[2]) || Math.abs(w.ffMessung().wert(0) - 16.4) > 1e-4 || Math.abs(w.zahlen().schub() - 0.89 * 0.89) > 1e-9
+                    || w.zahlen().sturmWerte() != 94) f.add("Wind " + w);
+        }
+        if (e != null && (Math.abs(e.kennzahlen().mittelwasser() - 0.131) > 1e-9 || Math.abs(e.kennzahlen().biasOhneMw() - 0.081) > 1e-9)) f.add("Mittelwasser " + e.kennzahlen());
+        // eine Zeile der Kennzahlen im Format von DB3 (17 Felder) bleibt lesbar
+        String alt = java.nio.file.Files.readString(gf.toPath(), StandardCharsets.UTF_8).replaceAll("(?m)^(kennzahlen\\.[^=]+= (?:[^;]*;){16}[^;\n]*);[^\n]*$", "$1");
+        File af = new File(d, "Alt.guete");
+        java.nio.file.Files.writeString(af.toPath(), alt, StandardCharsets.UTF_8);
+        var ra = com.dan.steuerhaus.Guete.lies(af).eintrag("sturm", "WITTDÜN");
+        if (ra == null || !Double.isNaN(ra.kennzahlen().mittelwasser()) || Math.abs(ra.kennzahlen().skill() - 0.9876) > 1e-9) f.add("Format DB3 " + (ra == null ? "fehlt" : ra.kennzahlen()));
         long m1 = gf.lastModified();
-        var g2 = new com.dan.steuerhaus.Guete(g1.quelle, Instant.parse("2026-11-22T19:00:00Z"), 24, g1.laeufe, g1.eintraege);
+        var g2 = new com.dan.steuerhaus.Guete(g1.quelle, Instant.parse("2026-11-22T19:00:00Z"), 24, g1.laeufe, g1.eintraege, g1.winde);
         if (g2.schreibe(gf) || gf.lastModified() != m1) f.add("gleicher Inhalt hat geschrieben");
         String k0 = probe(0).laeufe.get(0).kennung(), k1 = probe(0.001f).laeufe.get(0).kennung();
         if (k0.equals(k1) || k0.length() != 16) f.add("Kennung " + k0 + " / " + k1);
-        pruefe(f.isEmpty(), "Prüfstein 12: Datei Modell gegen Messung (hin und zurück, Lücke, bei(), Paar, Kennwert, gleicher Inhalt schreibt nicht, Kennung je Wert)",
+        pruefe(f.isEmpty(), "Prüfstein 12: Datei Modell gegen Messung (hin und zurück, Lücke, bei(), Paar, Kennwert, Wind, Mittelwasser, Format DB3, gleicher Inhalt schreibt nicht, Kennung je Wert)",
                 f.isEmpty() ? "1 Lauf, Kennung " + k0 + ", " + gf.length() + " Byte" : f.toString());
     }
 
@@ -265,9 +287,14 @@ public final class MessungCheck {
         if (Math.abs(k.max() - 4) > 1e-6 || !k.maxZeit().equals(Instant.parse("2013-12-05T17:00:00Z"))) f.add("Höchstes " + k.max() + " " + k.maxZeit());
         // am 6.12. (Berlin): das Hochwasser um 23:30 UTC (3,75) und 12:00 UTC (3,30), nicht das vom 5.12. mit 3,9
         if (!k.mitKennwert() || Math.abs(k.amTag() - 3.75) > 1e-9 || !k.amTagZeit().equals(t)) f.add("am Tag " + k.amTag() + " " + k.amTagZeit());
+        // seit DB4: Bias ohne Mittelwasser = Bias + (Mittelwasser − Mittel im Antrieb): 0,25 + (0,13 − 0,05) = 0,33
+        var k3 = com.dan.steuerhaus.messung.Guetebau.kennzahlen(m, o, paare, reihe, marken, 4.293, LocalDate.of(2013, 12, 6), 0.5, z, 0.13, 0.42, 0.05);
+        if (Math.abs(k3.biasOhneMw() - 0.33) > 1e-12 || Math.abs(k3.tidemittel() - 0.42) > 1e-12 || !Double.isNaN(k.biasOhneMw())) f.add("Mittelwasser " + k3.biasOhneMw());
+        var lm = new com.dan.steuerhaus.Guete.Lauf("x", List.of(), "", "", null, null, null, 300, "", "stufen-G0, tide-EOT20 und Gleichgewichtstide, Anlauf 3.0 h, Mittel -0.15 m, wetter-ERA5", "");
+        if (Math.abs(lm.mittel() + 0.15) > 1e-12 || new com.dan.steuerhaus.Guete.Lauf("x", List.of(), "", "", null, null, null, 300, "", "ohne", "").mittel() != 0) f.add("Mittel im Antrieb " + lm.mittel());
         var k2 = com.dan.steuerhaus.messung.Guetebau.kennzahlen(new double[0], new double[0], List.of(), reihe, marken, 4.293, LocalDate.of(2013, 12, 9), 0.5, z);
         if (k2.mitKennwert() || !Double.isNaN(k2.kennwert()) || k2.werte() != 0 || !Double.isNaN(k2.rmse()) || !Double.isNaN(k2.stauAnteil())) f.add("Tag außerhalb " + k2);
-        pruefe(f.isEmpty(), "Prüfstein 13: Kennzahlen an einem Handbeispiel (RMSE, Bias, Skill, Versatz der Hochwasser, Windstau ab 0,5 m, Höchstes, HThw am Tag in MEZ, ohne Deckung kein Kennwert)",
+        pruefe(f.isEmpty(), "Prüfstein 13: Kennzahlen an einem Handbeispiel (RMSE, Bias, Skill, Versatz der Hochwasser, Windstau ab 0,5 m, Höchstes, HThw am Tag in MEZ, ohne Deckung kein Kennwert, Bias ohne Mittelwasser, Mittel im Antrieb)",
                 f.isEmpty() ? String.format(Locale.GERMAN, "RMSE %.2f, Bias %.2f, Skill %.4f, HW %d (%+.1f min, %+.3f m), Windstau %.0f %% aus %d, am 6.12. %.2f m", k.rmse(), k.bias(), k.skill(),
                         k.hw(), k.hwZeit(), k.hwHoehe(), 100 * k.stauAnteil(), k.stauPaare(), k.amTag()) : f.toString());
     }
@@ -290,9 +317,21 @@ public final class MessungCheck {
         if (e.marken().size() != 1 || e.marken().get(0).art() != 'N' || !e.marken().get(0).zeit().equals(von.plusSeconds(1500))) f.add("Marken " + e.marken());
         double ab = Math.hypot(g.x(160) - 460231.9, g.y(214) - 6053989.6);
         if (Math.abs(e.abstand() - ab) > 1e-9 || !e.gitter().equals("G2")) f.add("Abstand " + e.abstand());
+        // seit DB4: Wind auf dem Raster; Richtung woher (u nach Osten, v nach Norden): aus Nord, Ost, Süd; 40 s daneben und ein
+        // fehlendes v zählen nicht; Zelle am Rand bis 10 km
+        var st = new com.dan.steuerhaus.ausgabe.Modellauszug.Station("List", "03032", 8.4125, 55.011, 10);
+        double[] wu = {0, 0, -10, 0, 7, 0, 0, 0, 0}, wv = {0, -10, 0, 10, 0, Double.NaN, 0, 0, 0};
+        var wi = com.dan.steuerhaus.ausgabe.Modellauszug.wind("sturm", st, 462429, 6096173, g, 157422, t, wu, wv, start, von, bis, 300);
+        float[] wf = wi.ff().werte(), wd = wi.dd().werte();
+        if (Math.abs(wf[0] - 10) > 1e-6 || Math.abs(wd[0] - 0) > 1e-6 || Math.abs(wd[1] - 90) > 1e-6 || Math.abs(wd[2] - 180) > 1e-6 || !Float.isNaN(wf[3]) || !Float.isNaN(wf[4])
+                || wf[5] != 0 || !Float.isNaN(wf[6]) || Math.abs(wf[12]) > 1e-6)
+            f.add("Wind " + java.util.Arrays.toString(wf) + " " + java.util.Arrays.toString(wd));
+        if (Math.abs(com.dan.steuerhaus.ausgabe.Modellauszug.richtung(7, 0) - 270) > 1e-9) f.add("Richtung aus Westen " + com.dan.steuerhaus.ausgabe.Modellauszug.richtung(7, 0));
+        int zh = com.dan.steuerhaus.ausgabe.Modellauszug.zelle(g, 427677.5, 6003559.6, 7.892, 54.175), zf = com.dan.steuerhaus.ausgabe.Modellauszug.zelle(g, 415000, 6003559.6, 0, 0);
+        if (zh != 0 || zf != -1) f.add("Zelle am Rand " + zh + " / " + zf);
         long m0 = com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond()), m1 = com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond() + 300);
         if (m0 != von.getEpochSecond() + 300 || m1 != m0 || com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond() + 301) != m0 + 600) f.add("Raster der Mittel");
-        pruefe(f.isEmpty(), "Prüfstein 14: Raster des Modells (Einschwingen, ±30 s, trocken, −6 … 8 m, Ende), Marken im Zeitraum, Abstand der Zelle, Raster der Mittel (:05, :15 …)",
+        pruefe(f.isEmpty(), "Prüfstein 14: Raster des Modells (Einschwingen, ±30 s, trocken, −6 … 8 m, Ende), Marken im Zeitraum, Abstand der Zelle, Raster der Mittel (:05, :15 …), Wind (Richtung woher, Zelle am Rand bis 10 km)",
                 f.isEmpty() ? ist + String.format(Locale.GERMAN, ", Abstand %.1f m", e.abstand()) : f.toString());
     }
 
@@ -306,18 +345,44 @@ public final class MessungCheck {
             if (!(ga.umkreis() >= 200 && ga.umkreis() <= 1000)) f.add("Umkreis " + ga.umkreis());
             if (!(ga.einschwingen() >= 0) || !(ga.stau() > 0)) f.add("Einschwingen, Stau " + ga.einschwingen() + " " + ga.stau());
             if (!ga.datei().getParentFile().equals(m.relativ(".").getAbsoluteFile().toPath().normalize().toFile())) f.add("guete.datei nicht neben dem Manifest: " + ga.datei());
+            if (ga.wind().size() != 2 || !(ga.windMin() > 0 && ga.windSturm() > ga.windMin()) || !(ga.mittelwasserTage() >= 7)) f.add("Wind " + ga.wind() + " " + ga.windMin() + "/"
+                    + ga.windSturm() + ", Mittelwasser " + ga.mittelwasserTage() + " Tage");
             File gb = m.relativ("../../daten/gebiet");
             if (com.dan.core.pruef.Pegel.da(gb)) {
                 try {
                     var pg = com.dan.core.pruef.Pegel.lies(gb);
                     for (String p : ga.pegel()) if (!pg.containsKey(p)) f.add("Pegel " + p + " nicht im Gebiet");
+                    var ws = com.dan.steuerhaus.ausgabe.Modellauszug.windstationen(gb);
+                    for (String k : ga.wind()) if (!ws.containsKey(k)) f.add("Windstation " + k + " nicht im Gebiet");
                 } catch (Exception x) {
                     f.add("Gebiet: " + x.getMessage());
                 }
             }
         }
-        pruefe(f.isEmpty(), "Prüfstein 15: Schlüssel guete.* (7 Pegel im Gebiet, Umkreis, Einschwingen, Windstau, Dateien)",
-                f.isEmpty() ? ga.pegel() + ", " + Math.round(ga.umkreis()) + " m, " + Math.round(ga.einschwingen()) + " h, " + ga.stau() + " m, " + ga.datei().getName() : f.toString());
+        pruefe(f.isEmpty(), "Prüfstein 15: Schlüssel guete.* (7 Pegel und 2 Windstationen im Gebiet, Umkreis, Einschwingen, Windstau, Wind ab und Sturm, Mittelwasser, Dateien)",
+                f.isEmpty() ? ga.pegel() + ", Wind " + ga.wind() + ", " + Math.round(ga.umkreis()) + " m, " + Math.round(ga.einschwingen()) + " h, " + ga.stau() + " m, " + ga.windMin() + "/"
+                        + ga.windSturm() + " m/s, " + Math.round(ga.mittelwasserTage()) + " Tage, " + ga.datei().getName() : f.toString());
+    }
+
+    static void windzahlen() {
+        List<String> f = new ArrayList<>();
+        // Modell, Messung (auf 10 m), Richtungen: zwei unter 5 m/s (nur Bias, RMSE), drei darüber, zwei davon Sturm ab 15 m/s
+        double[] fm = {3, 4, 9, 14, 18, Double.NaN}, fg = {4, 3, 10, 16, 20, 12}, dm = {200, 210, 10, 250, 260, 0}, dg = {180, 300, 350, 240, 250, 0};
+        var k = com.dan.steuerhaus.messung.Guetebau.windzahlen(fm, dm, fg, dg, 5, 15);
+        if (k.werte() != 5 || Math.abs(k.bias() - (-1 + 1 - 1 - 2 - 2) / 5.0) > 1e-12) f.add("Werte, Bias " + k);
+        if (Math.abs(k.faktor() - 41.0 / 46) > 1e-12 || Math.abs(k.schub() - Math.pow(41.0 / 46, 2)) > 1e-12) f.add("Faktor " + k.faktor());
+        // Richtung gewichtet: 10 gegen 350 = +20 (Gewicht 10), +10 (16), +10 (20) → (200 + 160 + 200) / 46
+        if (Math.abs(k.richtung() - 560.0 / 46) > 1e-9) f.add("Richtung " + k.richtung());
+        if (k.sturmWerte() != 2 || Math.abs(k.sturmFaktor() - 32.0 / 36) > 1e-12 || Math.abs(k.sturmRichtung() - 10) > 1e-9 || Math.abs(k.sturmBias() + 2) > 1e-12) f.add("Sturm " + k);
+        if (Math.abs(k.maxModell() - 18) > 1e-12 || Math.abs(k.maxMessung() - 20) > 1e-12) f.add("höchster Wind " + k.maxModell() + "/" + k.maxMessung());
+        if (Math.abs(com.dan.steuerhaus.messung.Guetebau.winkel(10, 350) - 20) > 1e-9 || Math.abs(com.dan.steuerhaus.messung.Guetebau.winkel(350, 10) + 20) > 1e-9) f.add("Winkel");
+        double a20 = com.dan.steuerhaus.messung.Guetebau.auf10m(10, 20), a10 = com.dan.steuerhaus.messung.Guetebau.auf10m(10, 10);
+        if (Math.abs(a10 - 10) > 1e-12 || Math.abs(a20 - 10 * Math.log(10 / 2e-4) / Math.log(20 / 2e-4)) > 1e-12) f.add("auf 10 m " + a20);
+        var leer = com.dan.steuerhaus.messung.Guetebau.windzahlen(new double[0], new double[0], new double[0], new double[0], 5, 15);
+        if (leer.werte() != 0 || !Double.isNaN(leer.faktor()) || !Double.isNaN(leer.richtung())) f.add("leer " + leer);
+        pruefe(f.isEmpty(), "Prüfstein 16: Kennzahlen des Winds an einem Handbeispiel (Faktor und Richtung ab 5 m/s, Kreismittel über Nord, Sturm ab 15 m/s, Bias, höchster Wind, auf 10 m)",
+                f.isEmpty() ? String.format(Locale.GERMAN, "Faktor %.3f (Schub %.3f), Bias %.1f m/s, Richtung %+.1f°, Sturm %d Werte, Faktor %.3f; 10 m/s in 20 m sind %.2f m/s in 10 m",
+                        k.faktor(), k.schub(), k.bias(), k.richtung(), k.sturmWerte(), k.sturmFaktor(), a20) : f.toString());
     }
 
     // ------------------------------------------------------------------ 1 Skripte
@@ -356,7 +421,7 @@ public final class MessungCheck {
                 if (s.definition().contains("--")) f.add("Kommentar in der Spalte " + s.tabelle() + "." + s.name());
             }
         }
-        if (tabellen.size() != 14) f.add(tabellen.size() + " Tabellen statt 14: " + tabellen);                  // seit DB3: 14 (DB1, DB2: 10)
+        if (tabellen.size() != 16) f.add(tabellen.size() + " Tabellen statt 16: " + tabellen);                  // seit DB4: 16 (DB3: 14, DB1, DB2: 10)
         if (!sichten.equals(new LinkedHashSet<>(a.sichten()))) f.add("Sichten " + sichten + " statt " + a.sichten());
         pruefe(f.isEmpty(), "Prüfstein 1: Skripte für den Einrichter (zerlegt wie SQL Developer, Spalten mit bekanntem Typ, Präfix)",
                 f.isEmpty() ? anweisungen + " Anweisungen, " + tabellen.size() + " Tabellen mit " + spalten + " Spalten, " + sequenzen.size() + " Sequenzen, " + indizes.size()
