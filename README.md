@@ -33,7 +33,8 @@ Die ausführliche Beschreibung – Schichten, Schlüssel des Manifests, Bedienun
 | `rundgang`, `ton` | Rundgang, Ton |
 | `vergleich`, `regler`, `jahr` | Sturmflut-Labor: Vergleich mit Schieber, Regler im Live-Lauf, das Jahr |
 | `gezeiten` | Tidenkalender, Vorhersage, Mond |
-| `demo` | SteuerhausCheck, RegieCheck, EinblendungCheck, KinoCheck, AusgabeCheck, AnalyseCheck |
+| `messung`, `chronik`, `guete` | Messarchiv (Sammler ohne Fenster, Oracle über `com.dan.store`), Chronik der Hochwasser, Modell gegen Messung |
+| `demo` | SteuerhausCheck, RegieCheck, EinblendungCheck, KinoCheck, AusgabeCheck, AnalyseCheck, MessungCheck, ChronikCheck, GueteCheck |
 
 Importregel: Der Kern kennt weder AWT, Swing, FStyle noch den Renderer; `thema` und `ui` kennen FStyle, erst `buehne`
 kennt `com.dan.lauf`, `com.dan.core`, `com.dan.render.overlay` und `com.dan.kino`. Kein Paket kennt ein Projekt. Der

@@ -48,6 +48,8 @@ import java.util.Map;
  *   --chronik                seit DB2: die Chronik der Hochwasser schreiben (sonst nach jedem Abruf, nur bei Änderung)
  *   --wind-nachladen         seit DB2: Lücken im Wind aus den historischen Dateien des DWD füllen
  *   --fach-weg TABELLE TAG   seit DB2: ein Fach (Partition) von Hand wegnehmen, etwa MITTEL 2009-01-01
+ *   --guete                  seit DB3: Modell gegen Messung – die Datei des Modells (guete.modell, von Ausgabe --guete)
+ *                            übernehmen, die Kennzahlen rechnen und guete.datei schreiben (nur bei Änderung)
  * </pre>
  * Ausgabe auf der Konsole und in {@code %USERPROFILE%\.steuerhaus\<Titel>\sammler.log} (höchstens 1 MB, dann eine Stufe
  * zurück). Ein zweiter Lauf zur selben Zeit wartet nicht, er endet mit Exit 3. Exit 0: in Ordnung, 1: Fehler, 2: Aufruf.
@@ -58,6 +60,9 @@ public final class Sammler {
 
     private final Messauftrag a;
     private final Log log;
+    /** Seit DB3: die Schlüssel guete.* (null: ohne Modell gegen Messung) und die Zone der App (Tag des HThw). */
+    com.dan.steuerhaus.Guete.Auftrag guete;
+    java.time.ZoneId zone = java.time.ZoneId.of("Europe/Berlin");
     private final Scheitelsuche suche = new Scheitelsuche();
     private final Ausreisser ausreisser = new Ausreisser();
 
@@ -82,7 +87,7 @@ public final class Sammler {
                 case "--gebiet" -> gebiet = args[++i];
                 case "--nur-plan" -> nurPlan = true;
                 case "--grenze" -> grenze = Double.parseDouble(args[++i]);
-                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen", "--chronik", "--wind-nachladen" ->
+                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen", "--chronik", "--wind-nachladen", "--guete" ->
                         auftrag = args[i].substring(2);
                 case "--fach-weg" -> {
                     auftrag = "fach-weg";
@@ -97,12 +102,14 @@ public final class Sammler {
         }
         if (manifest == null || auftrag == null) {
             System.err.println("Aufruf: Sammler --manifest <datei> --probe|--verbinden|--einrichten|--uebernehmen --gebiet <ordner>|--abruf|--pflege|--bericht|--pruefen"
-                    + "|--chronik|--wind-nachladen|--fach-weg <TABELLE> <JJJJ-MM-TT>");
+                    + "|--chronik|--wind-nachladen|--fach-weg <TABELLE> <JJJJ-MM-TT>|--guete");
             return 2;
         }
         Messauftrag a;
+        Manifest mf;
         try {
-            a = Messauftrag.lies(Manifest.lies(new File(manifest)));
+            mf = Manifest.lies(new File(manifest));
+            a = Messauftrag.lies(mf);
         } catch (IOException e) {
             System.err.println("Manifest: " + e.getMessage());
             return 2;
@@ -113,6 +120,8 @@ public final class Sammler {
         }
         try (Log log = new Log(a.protokoll(), System.out)) {
             Sammler s = new Sammler(a, log);
+            s.guete = com.dan.steuerhaus.Guete.Auftrag.lies(mf);                      // seit DB3
+            s.zone = java.time.ZoneId.of(mf.text("app.zone", "Europe/Berlin"));
             log.zeile("Sammler " + auftrag + " · " + a.name() + " · " + a.db());
             try {
                 return switch (auftrag) {
@@ -136,6 +145,7 @@ public final class Sammler {
                     }
                     case "chronik" -> s.mitSperre(s::chronikAllein);
                     case "wind-nachladen" -> s.mitSperre(s::windNachladen);
+                    case "guete" -> s.mitSperre(s::guete);
                     case "fach-weg" -> {
                         String t = fachTabelle, d = fachTag;
                         yield s.mitSperre(() -> s.fachWeg(t, d));
@@ -249,7 +259,7 @@ public final class Sammler {
         String p = a.praefix();
         Einrichter e = new Einrichter();
         e.praefix = p;
-        e.version = 2;                                                              // seit DB2
+        e.version = 3;                                                              // seit DB3 (2: DB2)
         e.sichten = a.sichten().toArray(String[]::new);
         e.metadaten = new String[] {p + "STATION.LAGE", p + "ORT.LAGE"};
         e.srid = a.srid();
@@ -262,7 +272,11 @@ public final class Sammler {
                         + p + "ROH', '" + p + "MITTEL')", -1),
                 new Einrichter.Soll("Stationen in WGS84", "SELECT TO_CHAR(COUNT(CASE WHEN LAGE_WGS84 IS NOT NULL THEN 1 END)) FROM " + p + "STATION_V", -1),
                 new Einrichter.Soll("Sturmfluten", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "STURMFLUT_V", -1),
-                new Einrichter.Soll("Landunter", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "LANDUNTER_V", -1));
+                new Einrichter.Soll("Landunter", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "LANDUNTER_V", -1),
+                new Einrichter.Soll("Läufe des Modells (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "LAUF", -1),
+                new Einrichter.Soll("Pegel mit HThw (seit DB3)", "SELECT TO_CHAR(COUNT(HTHW)) FROM " + p + "STATION", -1),
+                new Einrichter.Soll("Werte Modell gegen Messung (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "VERGLEICH_V", -1),
+                new Einrichter.Soll("Paare der Scheitel (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "SCHEITEL_PAAR_V", -1));
         return e;
     }
 
@@ -270,6 +284,13 @@ public final class Sammler {
         try (Connection c = verbinde(false)) {
             Einrichter.Ergebnis r = einrichter().einrichten(c, a.sql(), (t, x) -> log.zeile(String.format(Locale.ROOT, "  %3.0f %% %s", 100 * x, t)));
             r.zeilen().forEach(z -> log.zeile(z));
+            // seit DB3: Der Einrichter trägt neue Spalten erst nach den Skripten nach; ihre Kommentare (COMMENT ON COLUMN) liefen
+            // dann ins Leere. Hat er Spalten nachgetragen und meldet Fehler, einmal noch – jetzt gibt es die Spalten.
+            if (!r.ok() && r.zeilen().stream().anyMatch(z -> z.startsWith("ok ") && z.endsWith(" nachgetragen"))) {
+                log.zeile("Spalten nachgetragen: noch einmal einrichten, damit auch ihre Kommentare greifen");
+                r = einrichter().einrichten(c, a.sql(), (t, x) -> { });
+                r.zeilen().forEach(z -> log.zeile(z));
+            }
             log.zeile("Einrichten: " + r.kurz());
             return r.ok() ? 0 : 1;
         }
@@ -529,6 +550,37 @@ public final class Sammler {
     }
 
     /**
+     * Seit DB3: Modell gegen Messung. Übernimmt die Datei des Modells ({@code guete.modell}) – ein Lauf mit neuer Kennung
+     * wird als Ganzes ersetzt –, rechnet die Kennzahlen aller Läufe und schreibt {@code guete.datei} (nur bei Änderung).
+     */
+    int guete() throws Exception {
+        if (guete == null) {
+            log.zeile("Im Manifest fehlt guete.datei – die App hat kein Modell gegen Messung.");
+            return 2;
+        }
+        if (guete.modell() == null || !guete.modell().isFile()) {
+            log.zeile("Die Datei des Modells fehlt (" + guete.modell() + "): zuerst Ausgabe --guete.");
+            return 1;
+        }
+        Instant t0 = Instant.now();
+        com.dan.steuerhaus.Guete mo = com.dan.steuerhaus.Guete.lies(guete.modell());
+        try (Connection c = verbinde(false)) {
+            Messarchiv ar = new Messarchiv(c, a.praefix(), a.srid());
+            Guetebau.Bilanz b = Guetebau.einlesen(ar, mo, log::zeile);
+            log.zeile("Güte: " + b.kurz());
+            int n = Guetebau.rechnen(ar, guete.stau(), zone);
+            log.zeile("Güte: Kennzahlen für " + n + " Pegel in den Läufen gerechnet");
+            String quelle = "Messarchiv " + a.schema() + ": " + mo.quelle + "; Messung von PEGELONLINE (WSV, DL-DE Zero 2.0, ungeprüfte Rohdaten), Mittel über 10 Minuten, "
+                    + "Hoch- und Niedrigwasser aus der Scheitelsuche; HThw aus den Kennwerten von PEGELONLINE";
+            com.dan.steuerhaus.Guete g = Guetebau.aus(ar, guete, quelle, zone);
+            String z = Guetebau.schreiben(g, guete);
+            log.zeile(z);
+            ar.abruf("GUETE", t0, sekunden(t0), b.werte(), 0, b.ohneStation().size(), b.kurz() + "; " + z);
+        }
+        return 0;
+    }
+
+    /**
      * Füllt Lücken im Wind: je Windstation die historischen ZIP des DWD, deren Zeitraum zwischen dem ersten und dem jüngsten
      * Wert liegt und dort zu weniger als 90 % belegt ist; eingefügt wird alles, was fehlt (vorhandene Schlüssel bleiben).
      */
@@ -666,6 +718,8 @@ public final class Sammler {
             abschnitt(ar, "Lücken über 60 min in den Minutenwerten (Pegel · Lücken · längste in min)",
                     "SELECT s.SCHLUESSEL, COUNT(*), ROUND(MAX(l.D)) FROM (SELECT STATION_ID, (ZEIT - LAG(ZEIT) OVER (PARTITION BY STATION_ID ORDER BY ZEIT)) * 1440 D FROM "
                             + p + "ROH) l JOIN " + p + "STATION s ON s.STATION_ID = l.STATION_ID WHERE l.D > 60 GROUP BY s.SCHLUESSEL ORDER BY 3 DESC", 30);
+            abschnitt(ar, "Modell gegen Messung (Lauf · Pegel · Werte · RMSE · Bias · Skill · HW · Versatz min · m · Windstau-Anteil · gegen HThw)",
+                    "SELECT LAUF, SCHLUESSEL, WERTE, RMSE, BIAS, SKILL, HW, HW_ZEIT, HW_HOEHE, STAU_ANTEIL, GEGEN_HTHW FROM " + p + "GUETE_V ORDER BY VON, LAUF, SCHLUESSEL", 80);
             Aufbewahrung.Plan pl = Aufbewahrung.plan(ar.faecher("ROH", 1), ar.faecher("MITTEL", 12), LocalDate.now(ZoneOffset.UTC), a.rohMonate(), platz, a.grenzeMb());
             log.zeile("Nächste Pflege: " + (pl.leer() ? "nichts wegzunehmen" : String.join("; ", pl.gruende())));
         }

@@ -136,6 +136,18 @@ public final class Messarchiv {
         return i;
     }
 
+    /** Seit DB3: das höchste Tidehochwasser (HThw, m NHN) einer Station und sein Tag (null: ohne). */
+    public void hthw(int station, double hoehe, LocalDate tag) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("UPDATE " + p + "STATION SET HTHW = ?, HTHW_TAG = " + (tag == null ? "NULL" : "TO_DATE(?, 'YYYY-MM-DD')")
+                + " WHERE STATION_ID = ?")) {
+            setze(st, 1, hoehe);
+            int i = 2;
+            if (tag != null) st.setString(i++, tag.toString());
+            st.setInt(i, station);
+            st.executeUpdate();
+        }
+    }
+
     /** Ersetzt die Konstanten einer Station aus einer Herkunft (Z0 als Zeile mit TIDE = 'Z0'; Zeitraum der Analyse oder null). */
     public void gezeit(int station, String herkunft, double z0, List<Vorhersage.Konstante> k, Instant von, Instant bis) throws SQLException {
         try (PreparedStatement st = c.prepareStatement("DELETE FROM " + p + "GEZEIT WHERE STATION_ID = ? AND HERKUNFT = ?")) {

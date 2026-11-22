@@ -34,6 +34,16 @@ public final class Uebernahme {
 
     private Uebernahme() { }
 
+    /** Seit DB3: der Tag eines Kennwerts (HThw, NTnw) oder null. */
+    static java.time.LocalDate tag(Pegel.Kennwert k) {
+        if (k == null || k.datum() == null || k.datum().isBlank()) return null;
+        try {
+            return java.time.LocalDate.parse(k.datum().strip());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     public static Ergebnis uebernehmen(Messarchiv a, Messauftrag m, File gebiet, Consumer<String> log) throws IOException, SQLException {
         int np = 0, nw = 0, no = 0;
         long nr = 0, nm = 0;
@@ -42,6 +52,7 @@ public final class Uebernahme {
             for (Pegel p : Pegel.lies(gebiet).values()) {
                 double[] u = Utm.vorwaerts(p.laenge, p.breite, 32);
                 int id = a.station("PEGEL", p.name, p.name, p.nummer, p.gewaesser, p.laenge, p.breite, u[0], u[1], p.pegelnull, Double.NaN, p.kennwert("MThw"), "PEGELONLINE");
+                a.hthw(id, p.kennwert("HThw"), tag(p.kennwerte.get("HThw")));                 // seit DB3
                 if (p.analyse != null) {
                     List<Vorhersage.Konstante> k = new ArrayList<>();
                     for (Harmonik.Tide t : p.analyse.tiden()) k.add(new Vorhersage.Konstante(t.tide(), t.amplitude(), t.phaseGrad()));

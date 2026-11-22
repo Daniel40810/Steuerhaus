@@ -13,7 +13,7 @@ public static void main(String[] args) throws Exception {
 ## Schichten
 
 ```
-com.dan.steuerhaus          nur java.*              Manifest, Befehl, Befehle, Einstellungen, Chronik (seit DB2)
+com.dan.steuerhaus          nur java.*              Manifest, Befehl, Befehle, Einstellungen, Chronik (seit DB2), Guete (DB3)
 com.dan.steuerhaus.regie    nur java.*              Regiebuch, Regie, Fahrt, Lesezeichen (seit W3)
 com.dan.steuerhaus.analyse  nur java.*              Qualitaet, Protokoll (seit W5)
 com.dan.steuerhaus.thema    + Swing, FStyle         Thema (Labor, Nautik), Faerber
@@ -27,12 +27,14 @@ com.dan.steuerhaus.vergleich wie atlas            Vergleich, Mappe, Vergleichsan
 com.dan.steuerhaus.jahr     wie atlas               Jahresauftrag, Jahresmappe, Zeitplan, Jahresbild, Jahresansicht, Jahresfenster (Y3)
 com.dan.steuerhaus.gezeiten wie atlas, + core.astro Gezeitenauftrag, Gezeitentafel, Vorhersage, Mond, Kalenderansicht, Kalenderfenster (Z1)
 com.dan.steuerhaus.chronik  wie atlas               Abdeckung, Chronikansicht, Chronikfenster (seit DB2)
+com.dan.steuerhaus.guete    wie atlas               Gueteansicht, Guetefenster (seit DB3)
 com.dan.steuerhaus.messung  java.*, java.sql,        Sammler (Hauptklasse, ohne Fenster), Messauftrag, Messarchiv, Uebernahme,
-                              com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1), Chronikbau (DB2)
+                              com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1), Chronikbau (DB2),
+                                                    Guetebau (DB3)
                               core.pruef/astro/raum,
                               Kern, gezeiten
 com.dan.steuerhaus.ausgabe  wie buehne, + Kern von   Ausgabe (Hauptklasse), Aufnahme, Korn, Kodierer (seit W4), Vergleichsfolge (Y1),
-                                                    Jahresrechnung (Y3), Gezeitenrechnung (Z1)
+                                                    Jahresrechnung (Y3), Gezeitenrechnung (Z1), Modellauszug (DB3)
                               com.dan.film
 com.dan.steuerhaus.demo     alles                   SteuerhausCheck, RegieCheck (ohne Fenster und Grafikkarte), EinblendungCheck,
                                                     KinoCheck, AusgabeCheck, AnalyseCheck (mit Karte)
@@ -295,3 +297,25 @@ Stand, und Git sieht die Datei nur bei einem echten Ereignis.
 Manifest: `chronik.name`, `chronik.datei`, `chronik.kopie`, `chronik.ansicht` (Ansicht beim Sprung, nur am Ort), `chronik.hinweis`.
 Neue Aufträge des Sammlers: `--chronik`, `--wind-nachladen` (Lücken im Wind aus den historischen Dateien des DWD),
 `--fach-weg TABELLE TAG`. Prüfung: `demo.MessungCheck` (8–11) und `demo.ChronikCheck` (mit den echten Dateien, Bilder `DB2_*.png`).
+
+## Modell gegen Messung (DB3)
+
+Seit DB3 (Werkbuch HalligHooge 171, F268–F271 A) misst das Messarchiv das Modell: der Wasserstand der App an den Pegeln
+`guete.pegel` in jedem Lauf der Szenarien gegen die Messung. Zwei Schritte, eine Datei je Schritt (Format in `Guete`):
+
+```bash
+java -cp dist\HalligHooge.jar com.dan.steuerhaus.ausgabe.Ausgabe --manifest src\szenen\Hooge.steuerhaus --guete
+java -cp dist\HalligHooge.jar com.dan.steuerhaus.messung.Sammler --manifest src\szenen\Hooge.steuerhaus --guete
+```
+
+| Teil | Inhalt |
+|---|---|
+| `Guete` (Kern) | Läufe, je Pegel Zelle, Reihe und Marken des Modells, Messung, Paare der Hochwasser, Kennzahlen; Kennung eines Laufs (SHA-256); Schlüssel `guete.*` (`Guete.Auftrag`); lesen, schreiben nur bei Änderung |
+| `ausgabe.Modellauszug` | je Archiv (geteilte Archive einmal) und Pegel die Reihe an der Zelle mit dem tiefsten Grund im Umkreis (`lauf.Pegelreihe`, je Stand nur die Zelle), erst nach `guete.einschwingen` Stunden; Marken mit Rückgang 0,1 m; nach `guete.modell` |
+| `messung.Guetebau` | in `HH_LAUF`, `HH_MODELL`, `HH_MODELL_SCHEITEL`, `HH_GUETE` (ein Lauf mit neuer Kennung als Ganzes ersetzt, fehlende stillgelegt); Kennzahlen aus `HH_VERGLEICH_V` und `HH_SCHEITEL_PAAR_V`: RMSE, Bias, Skill nach Willmott, Korrelation, Versatz der Hochwasser, Anteil des Windstaus ab `guete.stau`, höchstes Wasser, HThw am Tag (`HH_STATION.HTHW`); `Hooge.guete` aus dem Archiv |
+| `guete.Gueteansicht` | Lauf und Pegel zur Wahl, Kurven mit Marken und Paaren, Unterschied Modell − Messung, Kennzahlen aller Pegel (Klick wählt), bei Xaver das HThw; Knopf „Ansehen“ ins Szenario eine Stunde vor dem höchsten Wasser |
+| `Szenenapp` | Menü Labor › Modell gegen Messung (Strg Umschalt M), Kachel in der Gruppe „Labor“ |
+
+Manifest: `guete.name`, `guete.pegel`, `guete.umkreis`, `guete.einschwingen`, `guete.stau`, `guete.modell`, `guete.datei`,
+`guete.kopie`, `guete.ansicht`, `guete.hinweis`. Schema Stufe 3. Prüfung: `demo.MessungCheck` (12–15) und `demo.GueteCheck`
+(mit den echten Dateien, Bilder `DB3_Guete_*.png`).

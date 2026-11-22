@@ -47,6 +47,8 @@ import java.util.Locale;
  *      nach gezeiten.datei; ohne Bühne)
  * … --watt   (seit Z3: der Weg ins Watt und die Schwellen des Watt-Fensters aus Gelände und Modell, {@link Wattrechnung};
  *      nach watt.datei und watt/; ohne Bühne; braucht gezeiten.datei)
+ * … --guete   (seit DB3: der Wasserstand des Modells an den Pegeln aus den Archiven der Szenarien, {@link Modellauszug};
+ *      nach guete.modell; ohne Bühne; der Sammler bringt es mit der Messung zusammen)
  * </pre>
  * Neben die Datei schreibt sie {@code <ziel>.txt}: Bilder, Größe, Bildrate, Dauer, Rechenzeit, Speicher.
  */
@@ -56,7 +58,7 @@ public final class Ausgabe {
         String regie = null, fahrt = null, szenario = null, zeit = null, lz = null, blick = null, ffmpeg = null, vergleich = null, ausrichten = "uhrzeit";
         int breite = 1920, hoehe = 1080, teil = 8, crf = 18;
         double bjs = 24, verschluss = 180, korn = Double.NaN;
-        boolean einbl = true, png = false, standbild = false, mitTon = true, jahr = false, gezeiten = false, watt = false;
+        boolean einbl = true, png = false, standbild = false, mitTon = true, jahr = false, gezeiten = false, watt = false, guete = false;
         String postkarte = null, vorlage = null, zeilen = null;
         String folge = null, bereich = null, schritt = null, vname = null;
         List<String> vsonden = new ArrayList<>();
@@ -107,6 +109,7 @@ public final class Ausgabe {
                 case "--jahr" -> jahr = true;
                 case "--gezeiten" -> gezeiten = true;
                 case "--watt" -> watt = true;
+                case "--guete" -> guete = true;
                 default -> throw new IllegalArgumentException("Ausgabe: unbekannt: " + args[i]);
             }
         }
@@ -116,6 +119,14 @@ public final class Ausgabe {
             // seit Z3: ohne Bühne – Gelände, Archive, Kalender
             long j0 = System.nanoTime();
             Wattrechnung.erzeugen(m, com.dan.lauf.Szenen.lies(m.szenen()), x -> System.out.println("Ausgabe: " + x));
+            System.out.printf(Locale.GERMAN, "Ausgabe: fertig in %.1f s%n", (System.nanoTime() - j0) / 1e9);
+            System.exit(0);
+            return;
+        }
+        if (guete) {
+            // seit DB3: ohne Bühne – Pegel, Gebiet, Archive (je Stand nur die Zelle)
+            long j0 = System.nanoTime();
+            Modellauszug.erzeugen(m, com.dan.lauf.Szenen.lies(m.szenen()), x -> System.out.println("Ausgabe: " + x));
             System.out.printf(Locale.GERMAN, "Ausgabe: fertig in %.1f s%n", (System.nanoTime() - j0) / 1e9);
             System.exit(0);
             return;

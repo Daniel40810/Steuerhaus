@@ -36,7 +36,9 @@ import java.util.zip.ZipOutputStream;
  * Aufbewahrung und der Grenze; 5 das Lesen der Antworten von DWD und PEGELONLINE und die Adressen; 6 die Schlüssel
  * {@code messung.*} des Manifests; 7 die Importregel des Steuerhauses (wie Prüfstein 5 des SteuerhausCheck). Seit DB2 (Werkbuch
  * HalligHooge 169): 8 die Datei der Chronik (hin und zurück, unverändert schreibt nicht), 9 die Ereignisse am Ort und die
- * Sturmfluten über alle Pegel, 10 die Liste der historischen Dateien des DWD, 11 die Abdeckung eines Archivs.
+ * Sturmfluten über alle Pegel, 10 die Liste der historischen Dateien des DWD, 11 die Abdeckung eines Archivs. Seit DB3
+ * (Werkbuch HalligHooge 171): 12 die Datei Modell gegen Messung (hin und zurück, Kennung), 13 die Kennzahlen an einem
+ * Handbeispiel, 14 das Raster des Modells und der Messung, 15 die Schlüssel {@code guete.*}.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.MessungCheck --manifest src\szenen\Hooge.steuerhaus [--gebiet daten\gebiet] [--quellen ..\Steuerhaus\src]
  * </pre>
@@ -65,7 +67,7 @@ public final class MessungCheck {
         if (manifest == null) throw new IllegalArgumentException("--manifest fehlt");
         Manifest m = Manifest.lies(manifest);
         Messauftrag a = Messauftrag.lies(m);
-        System.out.println("MessungCheck (DB1, DB2): " + manifest);
+        System.out.println("MessungCheck (DB1, DB2, DB3): " + manifest);
         // 6 Schlüssel
         List<String> f6 = new ArrayList<>();
         if (a == null) f6.add("messung.db fehlt");
@@ -90,6 +92,10 @@ public final class MessungCheck {
         chronikGruppen();
         dwdListe();
         abdeckung();
+        gueteDatei();
+        gueteKennzahlen();
+        gueteRaster();
+        gueteSchluessel(m);
         if (quellen != null) {
             int v0 = SteuerhausCheck.verstoesse;
             SteuerhausCheck.importregel(quellen);
@@ -190,6 +196,130 @@ public final class MessungCheck {
                 ab == null ? "nichts gelesen" : ab[0] + " bis " + ab[1]);
     }
 
+    // ------------------------------------------------------------------ 12–15 seit DB3
+
+    static com.dan.steuerhaus.Guete probe(float aufschlag) {
+        Instant von = Instant.parse("2026-10-25T06:00:00Z");
+        float[] w = new float[13];
+        for (int i = 0; i < w.length; i++) w[i] = (float) (1.5 * Math.sin(i / 2.0) + aufschlag);
+        w[4] = Float.NaN;
+        var l = new com.dan.steuerhaus.Guete.Lauf("sturm", List.of("sturm", "seegang"), "_p6/archiv", "Probe; mit = und Semikolon", Instant.parse("2026-10-23T00:00:00Z"), von,
+                von.plusSeconds(3600), 300, "", "tide EOT20", "hydro 0.7");
+        var e = new com.dan.steuerhaus.Guete.Eintrag("sturm", "WITTDÜN", "Wittdün", 460231.9, 6053989.6, "G2", 79341, 112.6, -5.392,
+                new com.dan.steuerhaus.Guete.Reihe(von, 300, w), List.of(new com.dan.steuerhaus.Guete.Marke('H', von.plusSeconds(900), 1.5)),
+                com.dan.steuerhaus.Guete.Reihe.LEER, List.of(), List.of(), com.dan.steuerhaus.Guete.Kennzahlen.LEER);
+        l = l.mitKennung(com.dan.steuerhaus.Guete.kennung(l, List.of(e)));
+        var g = new com.dan.steuerhaus.Guete("Probe", Instant.parse("2026-11-22T18:00:00Z"), 24, List.of(l), List.of(e));
+        var k = new com.dan.steuerhaus.Guete.Kennzahlen(7, 0.12, -0.05, 0.9876, 0.9912, 1, 15.0, -0.2, 0.2, 1, 0.8, 2.5, von.plusSeconds(900), 4.293, LocalDate.of(2013, 12, 6), 3.752,
+                von.plusSeconds(1800));
+        var p = new com.dan.steuerhaus.Guete.Paar(von.plusSeconds(900), 1.5, von.plusSeconds(0), 1.7, 0.6, 1.1);
+        var mess = new com.dan.steuerhaus.Guete.Reihe(von.plusSeconds(300), 600, new float[] {0.1f, Float.NaN, -0.25f});
+        return new com.dan.steuerhaus.Guete(g.quelle, g.erstellt, g.einschwingen, g.laeufe, List.of(e.mit(mess, List.of(new com.dan.steuerhaus.Guete.Marke('H', von, 1.7)), List.of(p), k)));
+    }
+
+    static void gueteDatei() throws Exception {
+        List<String> f = new ArrayList<>();
+        File d = Files.createTempDirectory("guete").toFile(), gf = new File(d, "Probe.guete");
+        var g1 = probe(0);
+        if (!g1.schreibe(gf)) f.add("erstes Schreiben");
+        var r1 = com.dan.steuerhaus.Guete.lies(gf);
+        if (!r1.inhalt().equals(g1.inhalt())) f.add("hin und zurück");
+        var e = r1.eintrag("sturm", "WITTDÜN");
+        if (e == null) f.add("Eintrag fehlt");
+        else {
+            if (!Float.isNaN(e.modell().werte()[4]) || e.modell().belegt() != 12 || Math.abs(e.modell().wert(0) - 0) > 1e-6) f.add("Reihe des Modells " + e.modell().belegt());
+            if (Math.abs(e.messung().bei(Instant.parse("2026-10-25T06:25:00Z")) + 0.25) > 1e-6 || !Double.isNaN(e.messung().bei(Instant.parse("2026-10-25T06:20:00Z"))))
+                f.add("Messung bei()");
+            if (e.paare().size() != 1 || Math.abs(e.paare().get(0).versatzMin() - 15) > 1e-9 || Math.abs(e.paare().get(0).stauModell() - 0.9) > 1e-9) f.add("Paar " + e.paare());
+            if (!e.kennzahlen().mitKennwert() || !e.kennzahlen().kennwertTag().equals(LocalDate.of(2013, 12, 6)) || Math.abs(e.kennzahlen().skill() - 0.9876) > 1e-9) f.add("Kennzahlen");
+        }
+        if (!r1.laeufe.get(0).name().equals("Probe, mit - und Semikolon") || !r1.laeufe.get(0).szenarien().equals(List.of("sturm", "seegang"))) f.add("Lauf " + r1.laeufe.get(0));
+        if (r1.laufVon("seegang") == null || r1.laufVon("ruhig") != null) f.add("laufVon");
+        long m1 = gf.lastModified();
+        var g2 = new com.dan.steuerhaus.Guete(g1.quelle, Instant.parse("2026-11-22T19:00:00Z"), 24, g1.laeufe, g1.eintraege);
+        if (g2.schreibe(gf) || gf.lastModified() != m1) f.add("gleicher Inhalt hat geschrieben");
+        String k0 = probe(0).laeufe.get(0).kennung(), k1 = probe(0.001f).laeufe.get(0).kennung();
+        if (k0.equals(k1) || k0.length() != 16) f.add("Kennung " + k0 + " / " + k1);
+        pruefe(f.isEmpty(), "Prüfstein 12: Datei Modell gegen Messung (hin und zurück, Lücke, bei(), Paar, Kennwert, gleicher Inhalt schreibt nicht, Kennung je Wert)",
+                f.isEmpty() ? "1 Lauf, Kennung " + k0 + ", " + gf.length() + " Byte" : f.toString());
+    }
+
+    static void gueteKennzahlen() {
+        List<String> f = new ArrayList<>();
+        java.time.ZoneId z = java.time.ZoneId.of("Europe/Berlin");
+        double[] m = {1, 2, 3, 2}, o = {0.5, 2, 2.5, 2};
+        Instant t = Instant.parse("2013-12-05T23:30:00Z");                   // in Berlin schon der 6.12.
+        var reihe = new com.dan.steuerhaus.Guete.Reihe(Instant.parse("2013-12-05T06:00:00Z"), 3600, new float[] {1, 3.9f, 2, Float.NaN, 1, 2, 3, 2, 1, 2, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2,
+                3, 2, 1, 2, 3, 2, 1, 2, 3, 2, 1, 2, 3, 2, 1, 2, 3});
+        var marken = List.of(new com.dan.steuerhaus.Guete.Marke('H', Instant.parse("2013-12-05T07:00:00Z"), 3.9), new com.dan.steuerhaus.Guete.Marke('H', t, 3.75),
+                new com.dan.steuerhaus.Guete.Marke('N', Instant.parse("2013-12-06T05:00:00Z"), 0.5), new com.dan.steuerhaus.Guete.Marke('H', Instant.parse("2013-12-06T12:00:00Z"), 3.3));
+        var paare = List.of(new com.dan.steuerhaus.Guete.Paar(Instant.parse("2026-10-25T12:30:00Z"), 2.0, Instant.parse("2026-10-25T12:00:00Z"), 2.2, 0.9, 1.3),
+                new com.dan.steuerhaus.Guete.Paar(Instant.parse("2026-10-26T00:50:00Z"), 3.0, Instant.parse("2026-10-26T01:00:00Z"), 3.3, 1.0, 2.3),
+                new com.dan.steuerhaus.Guete.Paar(Instant.parse("2026-10-26T13:00:00Z"), 1.6, Instant.parse("2026-10-26T13:00:00Z"), 1.5, 1.2, 0.3));
+        var k = com.dan.steuerhaus.messung.Guetebau.kennzahlen(m, o, paare, reihe, marken, 4.293, LocalDate.of(2013, 12, 6), 0.5, z);
+        if (k.werte() != 4 || Math.abs(k.rmse() - Math.sqrt(0.125)) > 1e-12 || Math.abs(k.bias() - 0.25) > 1e-12) f.add("RMSE, Bias " + k);
+        if (Math.abs(k.skill() - com.dan.core.pruef.Statistik.willmott(m, o)) > 1e-12 || !(k.skill() > 0.8 && k.skill() < 1)) f.add("Skill " + k.skill());
+        if (k.hw() != 3 || Math.abs(k.hwZeit() - (30 - 10 + 0) / 3.0) > 1e-9 || Math.abs(k.hwHoehe() - (-0.2 - 0.3 + 0.1) / 3) > 1e-9) f.add("Hochwasser " + k.hw() + " " + k.hwZeit() + " " + k.hwHoehe());
+        // Stau ab 0,5 m: die ersten beiden Paare; Modell (2,0−0,9) + (3,0−1,0) = 3,1, gemessen 1,3 + 2,3 = 3,6
+        if (k.stauPaare() != 2 || Math.abs(k.stauAnteil() - 3.1 / 3.6) > 1e-9) f.add("Windstau " + k.stauPaare() + " " + k.stauAnteil());
+        if (Math.abs(k.max() - 4) > 1e-6 || !k.maxZeit().equals(Instant.parse("2013-12-05T17:00:00Z"))) f.add("Höchstes " + k.max() + " " + k.maxZeit());
+        // am 6.12. (Berlin): das Hochwasser um 23:30 UTC (3,75) und 12:00 UTC (3,30), nicht das vom 5.12. mit 3,9
+        if (!k.mitKennwert() || Math.abs(k.amTag() - 3.75) > 1e-9 || !k.amTagZeit().equals(t)) f.add("am Tag " + k.amTag() + " " + k.amTagZeit());
+        var k2 = com.dan.steuerhaus.messung.Guetebau.kennzahlen(new double[0], new double[0], List.of(), reihe, marken, 4.293, LocalDate.of(2013, 12, 9), 0.5, z);
+        if (k2.mitKennwert() || !Double.isNaN(k2.kennwert()) || k2.werte() != 0 || !Double.isNaN(k2.rmse()) || !Double.isNaN(k2.stauAnteil())) f.add("Tag außerhalb " + k2);
+        pruefe(f.isEmpty(), "Prüfstein 13: Kennzahlen an einem Handbeispiel (RMSE, Bias, Skill, Versatz der Hochwasser, Windstau ab 0,5 m, Höchstes, HThw am Tag in MEZ, ohne Deckung kein Kennwert)",
+                f.isEmpty() ? String.format(Locale.GERMAN, "RMSE %.2f, Bias %.2f, Skill %.4f, HW %d (%+.1f min, %+.3f m), Windstau %.0f %% aus %d, am 6.12. %.2f m", k.rmse(), k.bias(), k.skill(),
+                        k.hw(), k.hwZeit(), k.hwHoehe(), 100 * k.stauAnteil(), k.stauPaare(), k.amTag()) : f.toString());
+    }
+
+    static void gueteRaster() {
+        List<String> f = new ArrayList<>();
+        Instant start = Instant.parse("2026-10-23T00:00:00Z"), von = Instant.parse("2026-10-25T06:00:00Z"), bis = von.plusSeconds(3600);
+        double v0 = von.getEpochSecond() - start.getEpochSecond();
+        // Stände: vor dem Einschwingen, genau, 12 s daneben, trocken, 40 s daneben (zählt nicht), außerhalb −6 … 8 m, nach dem Ende
+        double[] t = {v0 - 300, v0, v0 + 312, v0 + 600, v0 + 940, v0 + 1200, v0 + 1500, v0 + 3600, v0 + 3900};
+        double[] eta = {1, 1.1, 1.2, Double.NaN, 1.4, 9.5, 1.6, 1.7, 1.8};
+        var g = com.dan.core.gitter.Gitter.utm("G2", 32, 428000, 6011000, 200, 370, 430);
+        var mk = List.of(new com.dan.lauf.Pegelreihe.Marke(com.dan.lauf.Pegelreihe.Art.HOCHWASSER, v0 - 300, 2.0), new com.dan.lauf.Pegelreihe.Marke(com.dan.lauf.Pegelreihe.Art.NIEDRIGWASSER, v0 + 1500, 0.4));
+        int zelle = 160 + 370 * 214;
+        var e = com.dan.steuerhaus.ausgabe.Modellauszug.eintrag("sturm", "WITTDÜN", "Wittdün", 460231.9, 6053989.6, g, zelle, -5.4, t, eta, mk, start, von, bis, 300);
+        float[] w = e.modell().werte();
+        String ist = java.util.Arrays.toString(w);
+        if (w.length != 13 || Math.abs(w[0] - 1.1) > 1e-6 || Math.abs(w[1] - 1.2) > 1e-6 || !Float.isNaN(w[2]) || !Float.isNaN(w[3]) || !Float.isNaN(w[4]) || Math.abs(w[5] - 1.6) > 1e-6
+                || Math.abs(w[12] - 1.7) > 1e-6) f.add("Raster " + ist);
+        if (e.marken().size() != 1 || e.marken().get(0).art() != 'N' || !e.marken().get(0).zeit().equals(von.plusSeconds(1500))) f.add("Marken " + e.marken());
+        double ab = Math.hypot(g.x(160) - 460231.9, g.y(214) - 6053989.6);
+        if (Math.abs(e.abstand() - ab) > 1e-9 || !e.gitter().equals("G2")) f.add("Abstand " + e.abstand());
+        long m0 = com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond()), m1 = com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond() + 300);
+        if (m0 != von.getEpochSecond() + 300 || m1 != m0 || com.dan.steuerhaus.messung.Guetebau.mittelAb(von.getEpochSecond() + 301) != m0 + 600) f.add("Raster der Mittel");
+        pruefe(f.isEmpty(), "Prüfstein 14: Raster des Modells (Einschwingen, ±30 s, trocken, −6 … 8 m, Ende), Marken im Zeitraum, Abstand der Zelle, Raster der Mittel (:05, :15 …)",
+                f.isEmpty() ? ist + String.format(Locale.GERMAN, ", Abstand %.1f m", e.abstand()) : f.toString());
+    }
+
+    static void gueteSchluessel(Manifest m) {
+        List<String> f = new ArrayList<>();
+        var ga = com.dan.steuerhaus.Guete.Auftrag.lies(m);
+        if (ga == null) f.add("guete.datei fehlt");
+        else {
+            if (ga.pegel().size() != 7) f.add(ga.pegel().size() + " Pegel statt 7: " + ga.pegel());
+            if (ga.modell() == null) f.add("guete.modell fehlt");
+            if (!(ga.umkreis() >= 200 && ga.umkreis() <= 1000)) f.add("Umkreis " + ga.umkreis());
+            if (!(ga.einschwingen() >= 0) || !(ga.stau() > 0)) f.add("Einschwingen, Stau " + ga.einschwingen() + " " + ga.stau());
+            if (!ga.datei().getParentFile().equals(m.relativ(".").getAbsoluteFile().toPath().normalize().toFile())) f.add("guete.datei nicht neben dem Manifest: " + ga.datei());
+            File gb = m.relativ("../../daten/gebiet");
+            if (com.dan.core.pruef.Pegel.da(gb)) {
+                try {
+                    var pg = com.dan.core.pruef.Pegel.lies(gb);
+                    for (String p : ga.pegel()) if (!pg.containsKey(p)) f.add("Pegel " + p + " nicht im Gebiet");
+                } catch (Exception x) {
+                    f.add("Gebiet: " + x.getMessage());
+                }
+            }
+        }
+        pruefe(f.isEmpty(), "Prüfstein 15: Schlüssel guete.* (7 Pegel im Gebiet, Umkreis, Einschwingen, Windstau, Dateien)",
+                f.isEmpty() ? ga.pegel() + ", " + Math.round(ga.umkreis()) + " m, " + Math.round(ga.einschwingen()) + " h, " + ga.stau() + " m, " + ga.datei().getName() : f.toString());
+    }
+
     // ------------------------------------------------------------------ 1 Skripte
 
     static void skripte(Messauftrag a) throws Exception {
@@ -226,7 +356,7 @@ public final class MessungCheck {
                 if (s.definition().contains("--")) f.add("Kommentar in der Spalte " + s.tabelle() + "." + s.name());
             }
         }
-        if (tabellen.size() != 10) f.add(tabellen.size() + " Tabellen statt 10: " + tabellen);
+        if (tabellen.size() != 14) f.add(tabellen.size() + " Tabellen statt 14: " + tabellen);                  // seit DB3: 14 (DB1, DB2: 10)
         if (!sichten.equals(new LinkedHashSet<>(a.sichten()))) f.add("Sichten " + sichten + " statt " + a.sichten());
         pruefe(f.isEmpty(), "Prüfstein 1: Skripte für den Einrichter (zerlegt wie SQL Developer, Spalten mit bekanntem Typ, Präfix)",
                 f.isEmpty() ? anweisungen + " Anweisungen, " + tabellen.size() + " Tabellen mit " + spalten + " Spalten, " + sequenzen.size() + " Sequenzen, " + indizes.size()

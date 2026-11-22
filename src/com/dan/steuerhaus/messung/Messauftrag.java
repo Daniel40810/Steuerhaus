@@ -54,7 +54,7 @@ public record Messauftrag(String name, File db, File sql, String schema, String 
     /** Die Sichten, die das Schema tragen muss (03_sichten.sql). */
     public List<String> sichten() {
         return List.of(praefix + "STATION_V", praefix + "FUELLSTAND_V", praefix + "HOCHWASSER_V", praefix + "STURMFLUT_V", praefix + "SCHAETZUNG_V",
-                praefix + "LANDUNTER_V");
+                praefix + "LANDUNTER_V", praefix + "VERGLEICH_V", praefix + "SCHEITEL_PAAR_V", praefix + "GUETE_V");   // seit DB3 die letzten drei
     }
 
     static File norm(File f) { return f.toPath().toAbsolutePath().normalize().toFile(); }

@@ -1732,7 +1732,9 @@ public final class SteuerhausCheck {
         boolean gez = paket.equals("gezeiten");
         if (gez && p.startsWith("com.dan.core.astro")) return true;
         // seit DB2: chronik (Ansicht und Fenster der Chronik der Hochwasser) hat die Rechte von atlas
-        boolean atlas = paket.equals("atlas") || rundgang || tonP || paket.equals("vergleich") || paket.equals("regler") || paket.equals("jahr") || gez || paket.equals("chronik");
+        // seit DB3: guete (Ansicht und Fenster Modell gegen Messung) ebenso
+        boolean atlas = paket.equals("atlas") || rundgang || tonP || paket.equals("vergleich") || paket.equals("regler") || paket.equals("jahr") || gez || paket.equals("chronik")
+                || paket.equals("guete");
         if (atlas && (p.startsWith("com.dan.render") || p.startsWith("com.dan.kino") || p.startsWith("com.dan.film") || p.startsWith("com.dan.core")
                 || p.startsWith("com.dan.steuerhaus.demo") || p.startsWith("com.dan.steuerhaus.ausgabe"))) return false;
         boolean regie = paket.equals("regie") || paket.equals("analyse");

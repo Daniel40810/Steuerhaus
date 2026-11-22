@@ -585,6 +585,12 @@ public final class Szenenapp {
         File cd = chronikDatei();
         if (cd != null)
             labor.add(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(chronikName(), chronikUnterzeile(), null, this::chronikZeigen));
+        // seit DB3: Modell gegen Messung (Kachel mit Läufen, Pegeln und dem mittleren Skill)
+        com.dan.steuerhaus.Guete.Auftrag gua = com.dan.steuerhaus.Guete.Auftrag.lies(manifest);
+        if (gua != null) {
+            String unter = com.dan.steuerhaus.guete.Gueteansicht.kurz(guete());
+            labor.add(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(gua.name(), unter == null ? "noch zu rechnen (Ausgabe --guete, Sammler --guete)" : unter, null, this::gueteZeigen));
+        }
         if (!labor.isEmpty()) seite.kacheln.gruppe("Labor", labor);
         if (!vg.isEmpty()) seite.kacheln.gruppe("Vergleiche", vg);
         // seit Z1: der Begleiter – Tidenkalender (Kachel: der heutige Tag, einmal gemalt)
@@ -801,6 +807,11 @@ public final class Szenenapp {
         if (chronikDatei() != null)
             b.neu("labor.chronik", "Labor", chronikName() + " …", "ctrl shift H", this::chronikZeigen)
                     .hilfe("Landunter und Wasser über der Krone am Ort, Sturmfluten an den Pegeln, gemessen seit Oktober 2026; mit dem Sprung ins Szenario, das die Zeit abdeckt.");
+        // seit DB3 (Werkbuch HalligHooge 171): Modell gegen Messung
+        com.dan.steuerhaus.Guete.Auftrag gub = com.dan.steuerhaus.Guete.Auftrag.lies(manifest);
+        if (gub != null)
+            b.neu("labor.guete", "Labor", gub.name() + " …", "ctrl shift M", this::gueteZeigen)
+                    .hilfe("Der Wasserstand des Modells an den Pegeln gegen die Messung von PEGELONLINE, je Lauf der Szenarien: Kurven, Hoch- und Niedrigwasser, RMSE, Bias, Skill; bei Xaver das höchste Tidehochwasser (HThw).");
         // seit Z1 (Werkbuch HalligHooge 155): der Begleiter – Tidenkalender
         if (gezeitenAuftrag != null)
             b.neu("begleiter.kalender", "Begleiter", gezeitenAuftrag.name() + " …", "ctrl shift T", this::kalenderZeigen)
@@ -2649,6 +2660,50 @@ public final class Szenenapp {
         chronikFenster.oeffne();
         long mit = c.ereignisse.stream().filter(e -> chronikFenster.ansicht.szene(e) != null).count();
         protokoll.schreibe("Chronik", c.ereignisse.size() + " Ereignisse, " + mit + " mit Szenario, " + sz.size() + " Szenarien aus dem Archiv");
+    }
+
+    // ------------------------------------------------------------------ seit DB3: Modell gegen Messung
+
+    private com.dan.steuerhaus.guete.Guetefenster gueteFenster;
+
+    /** Modell gegen Messung oder null (keine Datei, unlesbar). */
+    com.dan.steuerhaus.Guete guete() {
+        com.dan.steuerhaus.Guete.Auftrag ga = com.dan.steuerhaus.Guete.Auftrag.lies(manifest);
+        if (ga == null || !ga.datei().isFile()) return null;
+        try {
+            return com.dan.steuerhaus.Guete.lies(ga.datei());
+        } catch (java.io.IOException | RuntimeException x) {
+            protokoll.schreibe("Güte", "nicht lesbar: " + x.getMessage());
+            return null;
+        }
+    }
+
+    /** Menü und Kachel: das Fenster Modell gegen Messung; der Knopf führt ins Szenario des Laufs, eine Stunde vor dem höchsten Wasser am Pegel. */
+    void gueteZeigen() {
+        com.dan.steuerhaus.Guete.Auftrag ga = com.dan.steuerhaus.Guete.Auftrag.lies(manifest);
+        com.dan.steuerhaus.Guete g = guete();
+        if (ga == null || g == null) {
+            hinweisUeberall("Noch kein Modell gegen Messung (" + (ga == null ? "guete.datei fehlt" : ga.datei().getName())
+                    + "): Ausgabe --guete liest die Archive, Sammler --guete rechnet die Kennzahlen (tools\\lauf_DB3.cmd)");
+            return;
+        }
+        if (gueteFenster != null && gueteFenster.offen()) gueteFenster.schliesse();
+        java.awt.Window w = seite != null && seite.sichtbar() ? javax.swing.SwingUtilities.getWindowAncestor(seite.karte) : hf.fenster;
+        java.util.Map<String, String> namen = new java.util.LinkedHashMap<>();
+        for (Szenario s : szenen.szenarien()) namen.put(s.schluessel, s.name);
+        String an = ga.ansicht().isEmpty() || szenen.ansicht(ga.ansicht()) == null ? null : ga.ansicht();
+        gueteFenster = new com.dan.steuerhaus.guete.Guetefenster(w, ga.name(), g, namen, zone, ga.hinweis(), (sz, t) -> {
+            if (szenen.szenario(sz) == null) {
+                hinweisUeberall("Szenario " + sz + " gibt es nicht (mehr) in der Szenendatei");
+                return;
+            }
+            protokoll.schreibe("Güte", "Lauf " + sz + " → Szenario zur Zeit " + t);
+            if (seite != null && seite.sichtbar()) szeneAusStartseite(sz, an, t);
+            else szeneZeigen(sz, an, t);
+            if (hf.fenster != null) hf.fenster.toFront();
+        });
+        gueteFenster.oeffne();
+        protokoll.schreibe("Güte", g.laeufe.size() + " Läufe, " + g.eintraege.size() + " Reihen");
     }
 
     /** Menü und Kachel: öffnet die Uhr; fehlen die Konstanten, rechnet sie der Kalender (wie dort). */
