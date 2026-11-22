@@ -422,6 +422,36 @@ public final class Messarchiv {
         }
     }
 
+    /** Seit DB2: die Hochwasser einer Station und Herkunft nach der Zeit (für die Chronik). */
+    public List<Chronikbau.Hochwasser> hochwasser(int station, String herkunft) throws SQLException {
+        List<Chronikbau.Hochwasser> l = new ArrayList<>();
+        try (PreparedStatement st = c.prepareStatement("SELECT " + epoch("ZEIT") + ", HOEHE, STAU FROM " + p + "SCHEITEL WHERE STATION_ID = ? AND ART = 'H' AND HERKUNFT = ? ORDER BY ZEIT")) {
+            st.setInt(1, station);
+            st.setString(2, herkunft);
+            try (ResultSet r = st.executeQuery()) { while (r.next()) l.add(new Chronikbau.Hochwasser(r.getLong(1), r.getDouble(2), zahl(r, 3))); }
+        }
+        return l;
+    }
+
+    /** Seit DB2: die Sturmfluten nach BSH je Pegel (Sicht STURMFLUT_V) nach dem Beginn. */
+    public List<Chronikbau.Pegelflut> sturmfluten() throws SQLException {
+        List<Chronikbau.Pegelflut> l = new ArrayList<>();
+        try (Statement st = c.createStatement(); ResultSet r = st.executeQuery("SELECT SCHLUESSEL, " + epoch("AB") + ", " + epoch("BIS") + ", TIDEN, SCHEITEL, UEBER_MTHW FROM " + p
+                + "STURMFLUT_V ORDER BY AB")) {
+            while (r.next()) l.add(new Chronikbau.Pegelflut(r.getString(1), r.getLong(2), r.getLong(3), r.getInt(4), r.getDouble(5), r.getDouble(6)));
+        }
+        return l;
+    }
+
+    /** Seit DB2: wie viele Zeilen ein Fach hält. */
+    public long zeilenImFach(Aufbewahrung.Fach f) throws SQLException {
+        if (!f.partition().matches("[A-Z0-9_$#]+")) throw new IllegalArgumentException("Name der Partition: " + f.partition());
+        try (Statement st = c.createStatement(); ResultSet r = st.executeQuery("SELECT COUNT(*) FROM " + p + f.tabelle() + " PARTITION (" + f.partition() + ")")) {
+            r.next();
+            return r.getLong(1);
+        }
+    }
+
     // ------------------------------------------------------------------ Protokoll der Abrufe
 
     /** Ein Eintrag im Protokoll. */

@@ -10,11 +10,13 @@ import java.util.Locale;
  * Die Schlüssel {@code messung.*} des Manifests (seit DB1, Werkbuch HalligHooge 167): wo die Datenbank und ihre Skripte
  * liegen, die Wachstumsgrenze, die Quellen und der geschätzte Ort (bei HalligHooge der Anleger Hooge, der keinen eigenen
  * Pegel hat: Gezeit aus {@code gezeiten.datei}, Windstau aus den Bezugspegeln, Höhen aus {@code landunter.krone} und
- * {@code landunter.nass}). Pfade relativ zum Manifest.
+ * {@code landunter.nass}). Seit DB2 die Chronik ({@code chronik.datei}, {@code chronik.kopie}) und der Ordner der historischen
+ * Windwerte des DWD ({@code messung.dwd.historisch}). Pfade relativ zum Manifest.
  */
 public record Messauftrag(String name, File db, File sql, String schema, String praefix, String passwortVariable, int srid,
         int rohMonate, int abrufTage, double grenzeMb, double warnungProzent, String pegelonline, String dwd, double dwdStunden,
-        String ortSchluessel, String ortName, File gezeiten, double krone, String kroneText, double nass, String nassText, File protokoll) {
+        String ortSchluessel, String ortName, File gezeiten, double krone, String kroneText, double nass, String nassText, File protokoll,
+        File chronik, List<File> chronikKopien, String dwdHistorisch) {
 
     /** Liest die Schlüssel; null, wenn {@code messung.db} fehlt (die App hat kein Messarchiv). */
     public static Messauftrag lies(Manifest m) {
@@ -36,7 +38,17 @@ public record Messauftrag(String name, File db, File sql, String schema, String 
                 gz.isEmpty() ? null : norm(m.relativ(gz)),
                 kr.length > 0 ? zahl(kr[0], Double.NaN) : Double.NaN, kr.length > 1 ? kr[1].strip() : "Krone",
                 na.length > 0 ? zahl(na[0], Double.NaN) : Double.NaN, na.length > 1 ? na[1].strip() : "Landunter",
-                new File(home, "sammler.log"));
+                new File(home, "sammler.log"),
+                m.text("chronik.datei", "").isEmpty() ? null : norm(m.relativ(m.text("chronik.datei", ""))), kopien(m),
+                m.text("messung.dwd.historisch", m.text("messung.dwd", "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/10_minutes/wind/recent")
+                        .replaceFirst("/recent/?$", "/historical")));
+    }
+
+    /** Seit DB2: {@code chronik.kopie} – weitere Orte der Chronik (durch ; getrennt, relativ zum Manifest), etwa im Abbild. */
+    static List<File> kopien(Manifest m) {
+        List<File> l = new java.util.ArrayList<>();
+        for (String k : m.text("chronik.kopie", "").split(";")) if (!k.isBlank()) l.add(norm(m.relativ(k.strip())));
+        return List.copyOf(l);
     }
 
     /** Die Sichten, die das Schema tragen muss (03_sichten.sql). */

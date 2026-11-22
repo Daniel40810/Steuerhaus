@@ -116,6 +116,24 @@ public final class Abruf {
         return l;
     }
 
+    /** Seit DB2: eine historische Datei des DWD: Name, erster und letzter Tag (einschließlich). */
+    public record Historisch(String name, java.time.LocalDate von, java.time.LocalDate bis) { }
+
+    /**
+     * Seit DB2: die historischen ZIP einer Station aus der Liste des Ordners {@code historical} des DWD
+     * ({@code 10minutenwerte_wind_<Kennung>_<JJJJMMTT>_<JJJJMMTT>_hist.zip}), jede nur einmal, nach dem Beginn.
+     */
+    public static List<Historisch> dwdHistorisch(String verzeichnis, String kennung) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("10minutenwerte_wind_" + java.util.regex.Pattern.quote(kennung) + "_(\\d{8})_(\\d{8})_hist\\.zip")
+                .matcher(verzeichnis);
+        java.util.Map<String, Historisch> l = new java.util.TreeMap<>();
+        DateTimeFormatter f = DateTimeFormatter.ofPattern("yyyyMMdd");
+        while (m.find()) l.putIfAbsent(m.group(), new Historisch(m.group(), java.time.LocalDate.parse(m.group(1), f), java.time.LocalDate.parse(m.group(2), f)));
+        List<Historisch> r = new ArrayList<>(l.values());
+        r.sort(java.util.Comparator.comparing(Historisch::von));
+        return r;
+    }
+
     static float wert(String s) {
         if (s.isEmpty()) return Float.NaN;
         float v = Float.parseFloat(s);

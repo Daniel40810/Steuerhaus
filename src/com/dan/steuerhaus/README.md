@@ -13,7 +13,7 @@ public static void main(String[] args) throws Exception {
 ## Schichten
 
 ```
-com.dan.steuerhaus          nur java.*              Manifest, Befehl, Befehle, Einstellungen
+com.dan.steuerhaus          nur java.*              Manifest, Befehl, Befehle, Einstellungen, Chronik (seit DB2)
 com.dan.steuerhaus.regie    nur java.*              Regiebuch, Regie, Fahrt, Lesezeichen (seit W3)
 com.dan.steuerhaus.analyse  nur java.*              Qualitaet, Protokoll (seit W5)
 com.dan.steuerhaus.thema    + Swing, FStyle         Thema (Labor, Nautik), Faerber
@@ -26,8 +26,9 @@ com.dan.steuerhaus.buehne   + com.dan.lauf, core,   Szenenapp, Katalog, Bedienun
 com.dan.steuerhaus.vergleich wie atlas            Vergleich, Mappe, Vergleichsansicht, Spieler (seit Y1)
 com.dan.steuerhaus.jahr     wie atlas               Jahresauftrag, Jahresmappe, Zeitplan, Jahresbild, Jahresansicht, Jahresfenster (Y3)
 com.dan.steuerhaus.gezeiten wie atlas, + core.astro Gezeitenauftrag, Gezeitentafel, Vorhersage, Mond, Kalenderansicht, Kalenderfenster (Z1)
+com.dan.steuerhaus.chronik  wie atlas               Abdeckung, Chronikansicht, Chronikfenster (seit DB2)
 com.dan.steuerhaus.messung  java.*, java.sql,        Sammler (Hauptklasse, ohne Fenster), Messauftrag, Messarchiv, Uebernahme,
-                              com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1)
+                              com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1), Chronikbau (DB2)
                               core.pruef/astro/raum,
                               Kern, gezeiten
 com.dan.steuerhaus.ausgabe  wie buehne, + Kern von   Ausgabe (Hauptklasse), Aufnahme, Korn, Kodierer (seit W4), Vergleichsfolge (Y1),
@@ -276,3 +277,21 @@ lässt nie zwei Sammler zugleich laufen (Exit 3).
 
 `demo.MessungCheck` prüft ohne Datenbank und ohne Netz: Skripte wie der Einrichter sie zerlegt, Scheitel an einer reinen
 Tide und an den Pegeln des Bestands, Ausreißer, Aufbewahrung und Grenze, Antworten der Quellen, Schlüssel, Importregel.
+
+## Chronik der Hochwasser (DB2)
+
+Seit DB2 (Werkbuch HalligHooge 169, F266 A, F267 A) zeigt die App, was das Messarchiv gefunden hat, ohne selbst die
+Datenbank zu fragen: Der Sammler schreibt eine Textdatei `chronik.datei` (Format in `Chronik`) neben das Manifest und in die
+Kopien `chronik.kopie` (etwa ins Abbild), **nur wenn sich ein Ereignis ändert oder dazukommt** – so hat ein Clone den letzten
+Stand, und Git sieht die Datei nur bei einem echten Ereignis.
+
+| Teil | Inhalt |
+|---|---|
+| `Chronik` (Kern) | Ereignisse LANDUNTER, KRONE (am Ort, geschätzt), STURMFLUT (an den Pegeln nach BSH); lesen, schreiben nur bei Änderung, Zeile `zuletzt(zone)` |
+| `messung.Chronikbau` | Kette der Hochwasser über der Krone (Abstand unter 18 h), Landunter ab der Höhe `nass`; Sturmfluten aller Pegel zu Ereignissen gefasst |
+| `chronik.Chronikansicht` | Band der Zeit mit Krone und Landunter, Liste der Ereignisse; Knopf „Ansehen“ ins erste Szenario, dessen Archiv die Zeit abdeckt (`Abdeckung`: `lauf.txt` und `zeiten.f64`) |
+| `Szenenapp` | Menü Labor › Chronik der Hochwasser (Strg Umschalt H), Kachel in der Gruppe „Labor“; Landunter-Uhr mit der Zeile der Chronik und dem gemessenen Windstau des jüngsten Landunters zur Wahl |
+
+Manifest: `chronik.name`, `chronik.datei`, `chronik.kopie`, `chronik.ansicht` (Ansicht beim Sprung, nur am Ort), `chronik.hinweis`.
+Neue Aufträge des Sammlers: `--chronik`, `--wind-nachladen` (Lücken im Wind aus den historischen Dateien des DWD),
+`--fach-weg TABELLE TAG`. Prüfung: `demo.MessungCheck` (8–11) und `demo.ChronikCheck` (mit den echten Dateien, Bilder `DB2_*.png`).

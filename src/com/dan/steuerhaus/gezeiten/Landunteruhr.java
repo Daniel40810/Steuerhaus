@@ -80,6 +80,8 @@ public final class Landunteruhr extends JPanel {
     /** Woher die Messungen kommen, je Bezug eine (für Prüfungen ersetzbar); leer ohne Bezug. */
     public List<Callable<List<Pegelonline.Messwert>>> messung = new ArrayList<>();
     public Consumer<File> gesichert = f -> { };
+    /** Seit DB2: eine Zeile aus der Chronik des Messarchivs unter der Uhr („Zuletzt Landunter …“), null: keine. */
+    public String chronikZeile;
 
     final Uhr uhr = new Uhr();
     final Latte latte = new Latte();
@@ -609,6 +611,17 @@ public final class Landunteruhr extends JPanel {
             String l4 = "Landunter ab " + zahl(hw.noetigNass(), 2, true) + " m Windstau, über die Krone ab " + zahl(hw.noetigKrone(), 2, true) + " m";
             if (!Double.isNaN(bd) && !hw.landunter() && hw.scheitel() + bd > lu.nass) l4 = "Landunter möglich (Scheitel + Fehler über " + zahl(lu.nass, 2, true) + " m); " + l4.substring(0, 1).toLowerCase(Locale.GERMAN) + l4.substring(1);
             g.drawString(l4, 20, ty + 68);
+            if (chronikZeile != null && !chronikZeile.isBlank()) {
+                // passt die Zeile nicht: kleiner, dann nur der erste Teil (bis „;“) und der Schluss („· Messarchiv“)
+                String cz = chronikZeile;
+                g.setFont(new Font(Font.SANS_SERIF, Font.ITALIC, 13));
+                if (g.getFontMetrics().stringWidth(cz) > w - 40) g.setFont(new Font(Font.SANS_SERIF, Font.ITALIC, 12));
+                if (g.getFontMetrics().stringWidth(cz) > w - 40 && cz.contains("; ")) {
+                    int pm = cz.lastIndexOf(" · ");
+                    cz = cz.substring(0, cz.indexOf("; ")) + (pm > 0 ? cz.substring(pm) : "");
+                }
+                g.drawString(cz, 20, ty + 90);
+            }
         }
     }
 

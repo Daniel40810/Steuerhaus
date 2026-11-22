@@ -34,7 +34,9 @@ import java.util.zip.ZipOutputStream;
  * Einrichter sie zerlegt (Tabellen, Spalten, Sequenzen, Indizes, Sichten); 2 die Scheitelsuche an einer reinen Tide und, mit
  * {@code --gebiet}, an den Pegeln des Bestands gegen deren Vorhersage; 3 der Filter der Ausreißer; 4 der Plan der
  * Aufbewahrung und der Grenze; 5 das Lesen der Antworten von DWD und PEGELONLINE und die Adressen; 6 die Schlüssel
- * {@code messung.*} des Manifests; 7 die Importregel des Steuerhauses (wie Prüfstein 5 des SteuerhausCheck).
+ * {@code messung.*} des Manifests; 7 die Importregel des Steuerhauses (wie Prüfstein 5 des SteuerhausCheck). Seit DB2 (Werkbuch
+ * HalligHooge 169): 8 die Datei der Chronik (hin und zurück, unverändert schreibt nicht), 9 die Ereignisse am Ort und die
+ * Sturmfluten über alle Pegel, 10 die Liste der historischen Dateien des DWD, 11 die Abdeckung eines Archivs.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.MessungCheck --manifest src\szenen\Hooge.steuerhaus [--gebiet daten\gebiet] [--quellen ..\Steuerhaus\src]
  * </pre>
@@ -63,7 +65,7 @@ public final class MessungCheck {
         if (manifest == null) throw new IllegalArgumentException("--manifest fehlt");
         Manifest m = Manifest.lies(manifest);
         Messauftrag a = Messauftrag.lies(m);
-        System.out.println("MessungCheck (DB1): " + manifest);
+        System.out.println("MessungCheck (DB1, DB2): " + manifest);
         // 6 Schlüssel
         List<String> f6 = new ArrayList<>();
         if (a == null) f6.add("messung.db fehlt");
@@ -84,6 +86,10 @@ public final class MessungCheck {
         ausreisser();
         aufbewahrung();
         lesen();
+        chronikDatei();
+        chronikGruppen();
+        dwdListe();
+        abdeckung();
         if (quellen != null) {
             int v0 = SteuerhausCheck.verstoesse;
             SteuerhausCheck.importregel(quellen);
@@ -91,6 +97,97 @@ public final class MessungCheck {
         }
         System.out.println(verstoesse == 0 ? "MessungCheck: " + steine + " Prüfsteine, alles in Ordnung" : "MessungCheck: " + verstoesse + " von " + steine + " Prüfsteinen verletzt");
         System.exit(verstoesse == 0 ? 0 : 1);
+    }
+
+    // ------------------------------------------------------------------ 8–11 seit DB2
+
+    static com.dan.steuerhaus.Chronik.Ereignis ev(com.dan.steuerhaus.Chronik.Art a, String ab, String bis, int tiden, double h, double stau) {
+        return new com.dan.steuerhaus.Chronik.Ereignis(a, Instant.parse(ab), Instant.parse(bis), Instant.parse(ab), tiden, h, stau, "Anleger Hooge", "Probe; mit Semikolon");
+    }
+
+    static void chronikDatei() throws Exception {
+        List<String> f = new ArrayList<>();
+        File d = Files.createTempDirectory("chronik").toFile(), cf = new File(d, "Probe.chronik");
+        List<com.dan.steuerhaus.Chronik.Ereignis> l = new ArrayList<>(List.of(
+                ev(com.dan.steuerhaus.Chronik.Art.LANDUNTER, "2026-10-25T23:34:04Z", "2026-10-26T11:48:40Z", 2, 3.512, 1.755),
+                ev(com.dan.steuerhaus.Chronik.Art.KRONE, "2026-10-28T13:01:24Z", "2026-10-28T13:01:24Z", 1, 2.441, 0.414)));
+        var c1 = new com.dan.steuerhaus.Chronik("Anleger Hooge", 2.01, "Krone des Sommerdeichs", 2.50, "Fennen nass", Instant.parse("2026-10-12T15:10:00Z"), "Probe", l,
+                Instant.parse("2026-11-22T17:00:00Z"));
+        boolean w1 = c1.schreibe(cf);
+        var r1 = com.dan.steuerhaus.Chronik.lies(cf);
+        if (!w1) f.add("erstes Schreiben");
+        if (!r1.inhalt().equals(c1.inhalt())) f.add("hin und zurück");
+        if (r1.ereignisse.size() != 2 || r1.letztes(com.dan.steuerhaus.Chronik.Art.LANDUNTER).tiden() != 2 || Math.abs(r1.nass - 2.5) > 1e-9) f.add("Felder " + r1.ereignisse);
+        var c2 = new com.dan.steuerhaus.Chronik("Anleger Hooge", 2.01, "Krone des Sommerdeichs", 2.50, "Fennen nass", Instant.parse("2026-10-12T15:10:00Z"), "Probe", l,
+                Instant.parse("2026-11-22T18:00:00Z"));
+        long m1 = cf.lastModified();
+        if (c2.schreibe(cf)) f.add("gleicher Inhalt hat geschrieben");
+        if (cf.lastModified() != m1) f.add("Datei berührt");
+        l.add(ev(com.dan.steuerhaus.Chronik.Art.STURMFLUT, "2026-10-25T21:14:00Z", "2026-10-26T11:01:00Z", 2, 3.896, 2.336));
+        var c3 = new com.dan.steuerhaus.Chronik("Anleger Hooge", 2.01, "Krone des Sommerdeichs", 2.50, "Fennen nass", Instant.parse("2026-10-12T15:10:00Z"), "Probe", l,
+                Instant.parse("2026-11-22T19:00:00Z"));
+        if (!c3.schreibe(cf)) f.add("neues Ereignis nicht geschrieben");
+        var r3 = com.dan.steuerhaus.Chronik.lies(cf);
+        if (r3.ereignisse.size() != 3 || r3.ereignisse.get(0).art() != com.dan.steuerhaus.Chronik.Art.STURMFLUT) f.add("Folge nach dem Beginn " + r3.ereignisse);
+        if (!r3.erstellt.equals(Instant.parse("2026-11-22T19:00:00Z"))) f.add("erstellt " + r3.erstellt);
+        String z = r3.zuletzt(java.time.ZoneId.of("Europe/Berlin"));
+        if (!z.startsWith("Zuletzt Landunter am 26.10.2026 (3,51 m, Windstau 1,76 m); über der Krone am 28.10.2026")) f.add("Zeile: " + z);
+        if (r3.ereignisse.get(1).text().contains(";")) f.add("Semikolon im Text");
+        pruefe(f.isEmpty(), "Prüfstein 8: Datei der Chronik (hin und zurück, gleicher Inhalt schreibt nicht, neues Ereignis schon, Folge, Zeile der Uhr)",
+                f.isEmpty() ? "3 Ereignisse; " + z : f.toString());
+    }
+
+    static void chronikGruppen() {
+        List<String> f = new ArrayList<>();
+        long t = Instant.parse("2026-10-20T00:00:00Z").getEpochSecond(), tide = 44_700;
+        double[] h = {1.5, 2.2, 1.6, 2.6, 2.3, 1.4, 1.3, 2.05};
+        List<com.dan.steuerhaus.messung.Chronikbau.Hochwasser> hw = new ArrayList<>();
+        for (int i = 0; i < h.length; i++) hw.add(new com.dan.steuerhaus.messung.Chronikbau.Hochwasser(t + i * tide, h[i], h[i] - 1.4));
+        hw.add(new com.dan.steuerhaus.messung.Chronikbau.Hochwasser(t + 20 * tide, 2.1, 0.7));               // nach einer Lücke: eigenes Ereignis
+        var e = com.dan.steuerhaus.messung.Chronikbau.amOrt(hw, 2.01, 2.50, "Anleger Hooge");
+        String arten = e.stream().map(x -> x.art().name() + "/" + x.tiden()).toList().toString();
+        if (!arten.equals("[KRONE/1, LANDUNTER/2, KRONE/1, KRONE/1]")) f.add("am Ort " + arten);
+        else if (Math.abs(e.get(1).hoehe() - 2.6) > 1e-9 || e.get(1).hoechst().getEpochSecond() != t + 3 * tide || Math.abs(e.get(1).stau() - 1.2) > 1e-9) f.add("Landunter " + e.get(1));
+        long s = Instant.parse("2026-10-25T21:00:00Z").getEpochSecond();
+        var fl = List.of(new com.dan.steuerhaus.messung.Chronikbau.Pegelflut("HUSUM", s + 9000, s + 9000, 1, 3.83, 2.11),
+                new com.dan.steuerhaus.messung.Chronikbau.Pegelflut("EIDER-SPERRWERK_AP", s + 4000, s + 50000, 2, 3.90, 2.34),
+                new com.dan.steuerhaus.messung.Chronikbau.Pegelflut("LIST_AUF_SYLT", s + 13000, s + 13000, 1, 2.93, 2.02),
+                new com.dan.steuerhaus.messung.Chronikbau.Pegelflut("BÜSUM", s + 30L * 86400, s + 30L * 86400, 1, 4.6, 2.7));
+        var sf = com.dan.steuerhaus.messung.Chronikbau.sturmfluten(fl);
+        if (sf.size() != 2) f.add(sf.size() + " Sturmfluten statt 2");
+        else {
+            if (!sf.get(0).ort().equals("Eider-Sperrwerk AP") || !sf.get(0).text().contains("an 3 Pegeln") || sf.get(0).tiden() != 2 || sf.get(0).ab().getEpochSecond() != s + 4000)
+                f.add("erste " + sf.get(0));
+            if (!sf.get(1).text().startsWith("Schwere Sturmflut") || !sf.get(1).ort().equals("Büsum")) f.add("zweite " + sf.get(1));
+        }
+        if (!com.dan.steuerhaus.messung.Chronikbau.name("LIST_AUF_SYLT").equals("List auf Sylt")) f.add("Name " + com.dan.steuerhaus.messung.Chronikbau.name("LIST_AUF_SYLT"));
+        pruefe(f.isEmpty(), "Prüfstein 9: Ereignisse am Ort (Kette über der Krone, Landunter ab der Höhe NASS, Lücke trennt) und Sturmfluten über alle Pegel",
+                f.isEmpty() ? arten + "; " + sf.size() + " Sturmfluten, „" + sf.get(0).text() + "“" : f.toString());
+    }
+
+    static void dwdListe() {
+        String html = "<a href=\"10minutenwerte_wind_02115_20100101_20191231_hist.zip\">10minutenwerte_wind_02115_20100101_20191231_hist.zip</a> 22-Nov-2021\n"
+                + "<a href=\"10minutenwerte_wind_02115_20200101_20251231_hist.zip\">10minutenwerte_wind_02115_20200101_20251231_hist.zip</a> 09-Apr-2026\n"
+                + "<a href=\"10minutenwerte_wind_02116_20200101_20251231_hist.zip\">x</a>\n";
+        var l = com.dan.steuerhaus.messung.Abruf.dwdHistorisch(html, "02115");
+        boolean ok = l.size() == 2 && l.get(1).von().toString().equals("2020-01-01") && l.get(1).bis().toString().equals("2025-12-31")
+                && l.get(1).name().equals("10minutenwerte_wind_02115_20200101_20251231_hist.zip");
+        pruefe(ok, "Prüfstein 10: Liste der historischen Dateien des DWD (je Datei einmal, Zeitraum aus dem Namen, nur die Station)",
+                l.stream().map(x -> x.von() + "–" + x.bis()).toList().toString());
+    }
+
+    static void abdeckung() throws Exception {
+        File a = Files.createTempDirectory("archiv").toFile(), g = new File(a, "G2");
+        g.mkdirs();
+        Files.writeString(new File(g, "lauf.txt").toPath(), "lauf = Probe\nstart = 2026-10-23T00:00:00Z\nseed = 1\n", StandardCharsets.UTF_8);
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(8 * 217).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < 217; i++) b.putDouble(54 * 3600 + i * 300.0);
+        Files.write(new File(g, "zeiten.f64").toPath(), b.array());
+        Instant[] ab = com.dan.steuerhaus.chronik.Abdeckung.lies(a);
+        boolean ok = ab != null && ab[0].equals(Instant.parse("2026-10-25T06:00:00Z")) && ab[1].equals(Instant.parse("2026-10-26T00:00:00Z"))
+                && com.dan.steuerhaus.chronik.Abdeckung.lies(new File(a, "fehlt")) == null;
+        pruefe(ok, "Prüfstein 11: Abdeckung eines Archivs (Beginn aus lauf.txt, erster und letzter Stand aus zeiten.f64, Unterordner G2)",
+                ab == null ? "nichts gelesen" : ab[0] + " bis " + ab[1]);
     }
 
     // ------------------------------------------------------------------ 1 Skripte

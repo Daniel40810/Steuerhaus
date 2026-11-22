@@ -1731,7 +1731,8 @@ public final class SteuerhausCheck {
         // seit Z1: gezeiten (Tafel, Vorhersage, Mond, Kalender) ebenso, dazu die Partialtiden und Ephemeriden des Kerns (core.astro)
         boolean gez = paket.equals("gezeiten");
         if (gez && p.startsWith("com.dan.core.astro")) return true;
-        boolean atlas = paket.equals("atlas") || rundgang || tonP || paket.equals("vergleich") || paket.equals("regler") || paket.equals("jahr") || gez;
+        // seit DB2: chronik (Ansicht und Fenster der Chronik der Hochwasser) hat die Rechte von atlas
+        boolean atlas = paket.equals("atlas") || rundgang || tonP || paket.equals("vergleich") || paket.equals("regler") || paket.equals("jahr") || gez || paket.equals("chronik");
         if (atlas && (p.startsWith("com.dan.render") || p.startsWith("com.dan.kino") || p.startsWith("com.dan.film") || p.startsWith("com.dan.core")
                 || p.startsWith("com.dan.steuerhaus.demo") || p.startsWith("com.dan.steuerhaus.ausgabe"))) return false;
         boolean regie = paket.equals("regie") || paket.equals("analyse");

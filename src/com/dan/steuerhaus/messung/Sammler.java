@@ -45,6 +45,9 @@ import java.util.Map;
  *   --pflege [--nur-plan] [--grenze MB]   Aufbewahrung und Grenze
  *   --bericht                Füllstand, Fächer, Stationen, Abrufe, Hochwasser, Sturmfluten, Landunter
  *   --pruefen [--gebiet G]   Prüfsteine DB1
+ *   --chronik                seit DB2: die Chronik der Hochwasser schreiben (sonst nach jedem Abruf, nur bei Änderung)
+ *   --wind-nachladen         seit DB2: Lücken im Wind aus den historischen Dateien des DWD füllen
+ *   --fach-weg TABELLE TAG   seit DB2: ein Fach (Partition) von Hand wegnehmen, etwa MITTEL 2009-01-01
  * </pre>
  * Ausgabe auf der Konsole und in {@code %USERPROFILE%\.steuerhaus\<Titel>\sammler.log} (höchstens 1 MB, dann eine Stufe
  * zurück). Ein zweiter Lauf zur selben Zeit wartet nicht, er endet mit Exit 3. Exit 0: in Ordnung, 1: Fehler, 2: Aufruf.
@@ -70,7 +73,7 @@ public final class Sammler {
     // ------------------------------------------------------------------ Aufruf
 
     static int lauf(String[] args) {
-        String manifest = null, gebiet = null, auftrag = null;
+        String manifest = null, gebiet = null, auftrag = null, fachTabelle = null, fachTag = null;
         boolean nurPlan = false;
         double grenze = Double.NaN;
         for (int i = 0; i < args.length; i++) {
@@ -79,7 +82,13 @@ public final class Sammler {
                 case "--gebiet" -> gebiet = args[++i];
                 case "--nur-plan" -> nurPlan = true;
                 case "--grenze" -> grenze = Double.parseDouble(args[++i]);
-                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen" -> auftrag = args[i].substring(2);
+                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen", "--chronik", "--wind-nachladen" ->
+                        auftrag = args[i].substring(2);
+                case "--fach-weg" -> {
+                    auftrag = "fach-weg";
+                    fachTabelle = args[++i];
+                    fachTag = args[++i];
+                }
                 default -> {
                     System.err.println("Unbekannt: " + args[i]);
                     return 2;
@@ -87,7 +96,8 @@ public final class Sammler {
             }
         }
         if (manifest == null || auftrag == null) {
-            System.err.println("Aufruf: Sammler --manifest <datei> --probe|--verbinden|--einrichten|--uebernehmen --gebiet <ordner>|--abruf|--pflege|--bericht|--pruefen");
+            System.err.println("Aufruf: Sammler --manifest <datei> --probe|--verbinden|--einrichten|--uebernehmen --gebiet <ordner>|--abruf|--pflege|--bericht|--pruefen"
+                    + "|--chronik|--wind-nachladen|--fach-weg <TABELLE> <JJJJ-MM-TT>");
             return 2;
         }
         Messauftrag a;
@@ -123,6 +133,12 @@ public final class Sammler {
                     case "pruefen" -> {
                         File g = gebiet == null ? null : new File(gebiet);
                         yield s.pruefen(g);
+                    }
+                    case "chronik" -> s.mitSperre(s::chronikAllein);
+                    case "wind-nachladen" -> s.mitSperre(s::windNachladen);
+                    case "fach-weg" -> {
+                        String t = fachTabelle, d = fachTag;
+                        yield s.mitSperre(() -> s.fachWeg(t, d));
                     }
                     default -> 2;
                 };
@@ -233,7 +249,7 @@ public final class Sammler {
         String p = a.praefix();
         Einrichter e = new Einrichter();
         e.praefix = p;
-        e.version = 1;
+        e.version = 2;                                                              // seit DB2
         e.sichten = a.sichten().toArray(String[]::new);
         e.metadaten = new String[] {p + "STATION.LAGE", p + "ORT.LAGE"};
         e.srid = a.srid();
@@ -271,6 +287,7 @@ public final class Sammler {
                     e.pegel(), e.roh(), e.wind(), e.mittel(), e.orte(), e.ort() ? ", Ort " + a.ortSchluessel() : "", v, s, z);
             ar.abruf("UEBERNAHME", t0, sekunden(t0), e.roh() + e.mittel(), 0, 0, m);
             log.zeile(m);
+            chronik(ar);
             log.zeile(String.format(Locale.GERMAN, "Platz: %.1f MB", ar.platzMb()));
         }
         return 0;
@@ -295,6 +312,12 @@ public final class Sammler {
             fehler += dwd(ar, false);
             int v = verdichtenAlle(ar), s = scheitelAlle(ar), z = schaetzen(ar);
             Aufbewahrung.Plan nachher = pflege(ar, false, Double.NaN);
+            try {
+                chronik(ar);
+            } catch (IOException | SQLException x) {
+                fehler++;
+                log.zeile("FEHLER Chronik: " + x.getMessage());
+            }
             double platz = ar.platzMb();
             String fuell = String.format(Locale.GERMAN, "%.1f MB von %.0f MB (%.0f %%)", platz, a.grenzeMb(), 100 * platz / a.grenzeMb());
             if (platz > a.warnungProzent() / 100 * a.grenzeMb()) log.zeile("WARNUNG Füllstand " + fuell);
@@ -487,6 +510,99 @@ public final class Sammler {
             l.add(new Messarchiv.Eintrag('H', t, e.hoehe() + stau, e.hoehe(), stau));
         }
         return ar.scheitel(ort.id(), SCHAETZUNG, l);
+    }
+
+    // ------------------------------------------------------------------ seit DB2: Chronik, Wind nachladen, Fach von Hand
+
+    /** Die Chronik bauen und schreiben (nur bei Änderung); gibt die Zeile fürs Protokoll. */
+    String chronik(Messarchiv ar) throws SQLException, IOException {
+        String z = Chronikbau.schreiben(Chronikbau.aus(ar, a), a);
+        log.zeile(z + (a.chronik() == null ? "" : " (" + a.chronik().getName() + ")"));
+        return z;
+    }
+
+    int chronikAllein() throws Exception {
+        try (Connection c = verbinde(false)) {
+            chronik(new Messarchiv(c, a.praefix(), a.srid()));
+        }
+        return 0;
+    }
+
+    /**
+     * Füllt Lücken im Wind: je Windstation die historischen ZIP des DWD, deren Zeitraum zwischen dem ersten und dem jüngsten
+     * Wert liegt und dort zu weniger als 90 % belegt ist; eingefügt wird alles, was fehlt (vorhandene Schlüssel bleiben).
+     */
+    int windNachladen() throws Exception {
+        try (Connection c = verbinde(false)) {
+            Messarchiv ar = new Messarchiv(c, a.praefix(), a.srid());
+            Instant t0 = Instant.now();
+            String verzeichnis = new String(Abruf.hole(a.dwdHistorisch() + "/", "text/html"), java.nio.charset.StandardCharsets.UTF_8);
+            long zeilen = 0;
+            int fehler = 0;
+            List<String> meldung = new ArrayList<>();
+            for (Messarchiv.Station st : ar.stationen("WIND").values()) {
+                if (st.kennung() == null) continue;
+                Long erst = ar.erste("MITTEL", st.id(), FF), zuletzt = ar.letzte("MITTEL", st.id(), FF);
+                if (erst == null) continue;
+                for (Abruf.Historisch h : Abruf.dwdHistorisch(verzeichnis, st.kennung())) {
+                    long von = h.von().atStartOfDay(ZoneOffset.UTC).toEpochSecond(), bis = h.bis().plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond() - 1;
+                    long v = Math.max(von, erst), b = Math.min(bis, zuletzt);
+                    if (b <= v) continue;
+                    long soll = (b - v) / 600, ist = ar.zahl("MITTEL", st.id(), FF, v, b);
+                    if (ist >= 0.9 * soll) {
+                        meldung.add(String.format(Locale.GERMAN, "%s %s: %d von %d da", st.name(), h.name(), ist, soll));
+                        continue;
+                    }
+                    try {
+                        List<Abruf.Wind> l = Abruf.dwd(Abruf.hole(a.dwdHistorisch() + "/" + h.name(), "application/zip"));
+                        long[] t = new long[l.size()];
+                        float[] ff = new float[t.length], dd = new float[t.length];
+                        for (int i = 0; i < t.length; i++) {
+                            Abruf.Wind w = l.get(i);
+                            t[i] = w.ende() - 300;
+                            ff[i] = w.ff() >= 0 && w.ff() <= 80 ? w.ff() : Float.NaN;
+                            dd[i] = w.dd() >= 0 && w.dd() <= 360 ? w.dd() : Float.NaN;
+                        }
+                        int f = ar.einfuegen("MITTEL", st.id(), FF, t, ff, erst - 1, zuletzt), d = ar.einfuegen("MITTEL", st.id(), DD, t, dd, erst - 1, zuletzt);
+                        long nachher = ar.zahl("MITTEL", st.id(), FF, v, b);
+                        zeilen += nachher - ist;
+                        meldung.add(String.format(Locale.GERMAN, "%s %s: %d Werte gelesen, belegt %d → %d von %d", st.name(), h.name(), l.size(), ist, nachher, soll));
+                        if (f + d == 0) meldung.add(st.name() + ": nichts gesendet");
+                    } catch (IOException | RuntimeException x) {
+                        fehler++;
+                        meldung.add(st.name() + " " + h.name() + ": " + x.getMessage());
+                    }
+                }
+            }
+            String m = zeilen + " neue Geschwindigkeiten; " + String.join("; ", meldung);
+            ar.abruf("DWD-HISTORISCH", t0, sekunden(t0), zeilen, 0, fehler, m);
+            log.zeile("Wind nachgeladen: " + m);
+            return fehler == 0 ? 0 : 1;
+        }
+    }
+
+    /** Nimmt ein Fach von Hand weg (nie den Anker, nie das laufende Fach); vorher die Zahl der Zeilen ins Protokoll. */
+    int fachWeg(String tabelle, String tag) throws Exception {
+        String t = tabelle.toUpperCase(Locale.ROOT).replaceFirst("^" + a.praefix(), "");
+        if (!t.equals("ROH") && !t.equals("MITTEL")) throw new IllegalArgumentException("Fächer gibt es nur in ROH und MITTEL, nicht in " + tabelle);
+        LocalDate d = LocalDate.parse(tag);
+        try (Connection c = verbinde(false)) {
+            Messarchiv ar = new Messarchiv(c, a.praefix(), a.srid());
+            Instant t0 = Instant.now();
+            Aufbewahrung.Fach f = ar.faecher(t, t.equals("ROH") ? 1 : 12).stream().filter(x -> !x.anker() && !d.isBefore(x.ab()) && d.isBefore(x.bis())).findFirst().orElse(null);
+            if (f == null) {
+                log.zeile("Kein Fach in " + t + " enthält " + d + " – nichts zu tun.");
+                return 0;
+            }
+            LocalDate heute = LocalDate.now(ZoneOffset.UTC);
+            if (!heute.isBefore(f.ab()) && heute.isBefore(f.bis())) throw new IllegalArgumentException("Das laufende Fach bleibt: " + f.kurz());
+            long n = ar.zeilenImFach(f);
+            ar.wegnehmen(f);
+            String m = "von Hand weg: " + f.kurz() + " mit " + n + " Zeilen";
+            ar.abruf("PFLEGE", t0, sekunden(t0), 1, n, 0, m);
+            log.zeile("Fach " + m);
+            return 0;
+        }
     }
 
     // ------------------------------------------------------------------ Pflege

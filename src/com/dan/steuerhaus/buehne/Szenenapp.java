@@ -573,13 +573,19 @@ public final class Szenenapp {
             vg.add(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(v.name(), unter, bild, () -> vergleichZeigen(v)));
         }
         // seit Y3: das Labor – ein Jahr in einer Minute (Kachel mit der Vorschau der Mappe, sonst der Ansicht)
+        List<com.dan.steuerhaus.atlas.Kachelleiste.Kachel> labor = new ArrayList<>();
         if (jahrAuftrag != null) {
             String[] warum = new String[1];
             com.dan.steuerhaus.jahr.Jahresmappe jm = jahrAuftrag.mappe(szenen, warum);
             File bild = jm != null && jm.vorschau().isFile() ? jm.vorschau() : !jahrAuftrag.ansicht().isEmpty() ? new File(vorschau, "ansicht_" + jahrAuftrag.ansicht() + ".png") : null;
             String unter = jahrAuftrag.abschnitte().size() + " Läufe des Modelljahrs, Boden als Differenzkarte" + (jm == null ? " · noch zu rechnen" : "");
-            seite.kacheln.gruppe("Labor", List.of(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(manifest.text("jahr.name", "Ein Jahr in einer Minute"), unter, bild, this::jahrZeigen)));
+            labor.add(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(manifest.text("jahr.name", "Ein Jahr in einer Minute"), unter, bild, this::jahrZeigen));
         }
+        // seit DB2: die Chronik der Hochwasser aus dem Messarchiv (Kachel mit dem jüngsten Ereignis)
+        File cd = chronikDatei();
+        if (cd != null)
+            labor.add(new com.dan.steuerhaus.atlas.Kachelleiste.Kachel(chronikName(), chronikUnterzeile(), null, this::chronikZeigen));
+        if (!labor.isEmpty()) seite.kacheln.gruppe("Labor", labor);
         if (!vg.isEmpty()) seite.kacheln.gruppe("Vergleiche", vg);
         // seit Z1: der Begleiter – Tidenkalender (Kachel: der heutige Tag, einmal gemalt)
         if (gezeitenAuftrag != null) {
@@ -791,6 +797,10 @@ public final class Szenenapp {
         if (jahrAuftrag != null)
             b.neu("labor.jahr", "Labor", manifest.text("jahr.name", "Ein Jahr in einer Minute") + " …", "ctrl shift J", this::jahrZeigen)
                     .hilfe("Der Boden der Läufe des Modelljahrs als Differenzkarte im Zeitraffer, mit Profil über den " + jahrAuftrag.sand() + ".");
+        // seit DB2 (Werkbuch HalligHooge 169): die Chronik der Hochwasser aus dem Messarchiv
+        if (chronikDatei() != null)
+            b.neu("labor.chronik", "Labor", chronikName() + " …", "ctrl shift H", this::chronikZeigen)
+                    .hilfe("Landunter und Wasser über der Krone am Ort, Sturmfluten an den Pegeln, gemessen seit Oktober 2026; mit dem Sprung ins Szenario, das die Zeit abdeckt.");
         // seit Z1 (Werkbuch HalligHooge 155): der Begleiter – Tidenkalender
         if (gezeitenAuftrag != null)
             b.neu("begleiter.kalender", "Begleiter", gezeitenAuftrag.name() + " …", "ctrl shift T", this::kalenderZeigen)
@@ -2561,8 +2571,84 @@ public final class Szenenapp {
                         && (hw == null || Math.abs(e.zeit().getEpochSecond() - a.scheitelZeit.getEpochSecond()) < Math.abs(hw.zeit().getEpochSecond() - a.scheitelZeit.getEpochSecond()))) hw = e;
             if (hw != null) w.add(new Object[] {a.sturmName + " im Modell", Math.round((a.scheitel - hw.hoehe()) / 0.05) * 0.05});
         }
+        // seit DB2: der Windstau des jüngsten Landunters aus der Chronik, gemessen
+        com.dan.steuerhaus.Chronik ch = chronik();
+        com.dan.steuerhaus.Chronik.Ereignis lu = ch == null ? null : ch.letztes(com.dan.steuerhaus.Chronik.Art.LANDUNTER);
+        if (lu != null && !Double.isNaN(lu.stau()))
+            w.add(new Object[] {"Landunter " + java.time.format.DateTimeFormatter.ofPattern("d.M.yyyy").format(lu.hoechst().atZone(zone)) + ", gemessen", Math.round(lu.stau() / 0.05) * 0.05});
         w.addAll(landunterAuftrag.wahl());
         return w;
+    }
+
+    // ------------------------------------------------------------------ seit DB2: die Chronik der Hochwasser
+
+    private com.dan.steuerhaus.chronik.Chronikfenster chronikFenster;
+
+    /** Die Datei der Chronik ({@code chronik.datei}, relativ zum Manifest) oder null, wenn das Manifest keine nennt. */
+    File chronikDatei() {
+        String d = manifest.text("chronik.datei", "");
+        return d.isEmpty() ? null : manifest.relativ(d);
+    }
+
+    String chronikName() { return manifest.text("chronik.name", "Chronik der Hochwasser"); }
+
+    /** Die Chronik oder null (keine Datei, unlesbar). */
+    com.dan.steuerhaus.Chronik chronik() {
+        File f = chronikDatei();
+        if (f == null || !f.isFile()) return null;
+        try {
+            return com.dan.steuerhaus.Chronik.lies(f);
+        } catch (java.io.IOException | RuntimeException x) {
+            protokoll.schreibe("Chronik", "nicht lesbar: " + x.getMessage());
+            return null;
+        }
+    }
+
+    /** „Zuletzt Landunter am …; über der Krone am … · Messarchiv“ oder null. */
+    String chronikZeile(com.dan.steuerhaus.Chronik c) { return c == null ? null : c.zuletzt(zone) + " · Messarchiv"; }
+
+    String chronikUnterzeile() {
+        com.dan.steuerhaus.Chronik c = chronik();
+        if (c == null) return "noch keine Chronik (der Sammler des Messarchivs schreibt sie)";
+        String z = chronikZeile(c);
+        return c.ereignisse.size() + (c.ereignisse.size() == 1 ? " Ereignis" : " Ereignisse") + " · " + z.replace(" · Messarchiv", "");
+    }
+
+    /** Die Szenarien aus dem Archiv mit der Zeit, die sie abdecken (in der Folge der Szenendatei). */
+    List<com.dan.steuerhaus.chronik.Chronikansicht.Szene> chronikSzenen() {
+        List<com.dan.steuerhaus.chronik.Chronikansicht.Szene> l = new ArrayList<>();
+        for (Szenario s : szenen.szenarien()) {
+            if (s.live() || s.archiv == null) continue;
+            java.time.Instant[] ab = com.dan.steuerhaus.chronik.Abdeckung.lies(s.archiv);
+            if (ab != null) l.add(new com.dan.steuerhaus.chronik.Chronikansicht.Szene(s.schluessel, s.name, ab[0], ab[1]));
+        }
+        return l;
+    }
+
+    /** Menü und Kachel: das Fenster der Chronik; der Knopf eines Ereignisses führt ins Szenario zur Zeit des höchsten Wassers. */
+    void chronikZeigen() {
+        com.dan.steuerhaus.Chronik c = chronik();
+        if (c == null) {
+            hinweisUeberall("Noch keine Chronik (" + (chronikDatei() == null ? "chronik.datei fehlt" : chronikDatei().getName())
+                    + "): der Sammler des Messarchivs schreibt sie, tools\\sammler.cmd --chronik");
+            return;
+        }
+        if (chronikFenster != null && chronikFenster.offen()) chronikFenster.schliesse();
+        java.awt.Window w = seite != null && seite.sichtbar() ? javax.swing.SwingUtilities.getWindowAncestor(seite.karte) : hf.fenster;
+        String ansicht = manifest.text("chronik.ansicht", "");
+        String an = ansicht.isEmpty() || szenen.ansicht(ansicht) == null ? null : ansicht;
+        List<com.dan.steuerhaus.chronik.Chronikansicht.Szene> sz = chronikSzenen();
+        chronikFenster = new com.dan.steuerhaus.chronik.Chronikfenster(w, chronikName(), c, sz, zone, manifest.text("chronik.hinweis", ""), (s, e) -> {
+            java.time.Instant t = e.hoechst().minusSeconds(3600);
+            if (t.isBefore(s.von())) t = s.von();
+            protokoll.schreibe("Chronik", e.art().anzeige + " " + e.hoechst() + " → Szenario " + s.schluessel() + (an == null ? "" : ", Ansicht " + an));
+            if (seite != null && seite.sichtbar()) szeneAusStartseite(s.schluessel(), e.art() == com.dan.steuerhaus.Chronik.Art.STURMFLUT ? null : an, t);
+            else szeneZeigen(s.schluessel(), e.art() == com.dan.steuerhaus.Chronik.Art.STURMFLUT ? null : an, t);
+            if (hf.fenster != null) hf.fenster.toFront();
+        });
+        chronikFenster.oeffne();
+        long mit = c.ereignisse.stream().filter(e -> chronikFenster.ansicht.szene(e) != null).count();
+        protokoll.schreibe("Chronik", c.ereignisse.size() + " Ereignisse, " + mit + " mit Szenario, " + sz.size() + " Szenarien aus dem Archiv");
     }
 
     /** Menü und Kachel: öffnet die Uhr; fehlen die Konstanten, rechnet sie der Kalender (wie dort). */
@@ -2590,6 +2676,7 @@ public final class Szenenapp {
                 landunterAuftrag.nassName(), wf, landunterWahl(t),
                 landunterAuftrag.hinweis(), zone, manifest.fotos());
         landunterFenster.uhr.gesichert = f -> protokoll.schreibe("Landunter-Uhr", "gesichert: " + f.getName());
+        landunterFenster.uhr.chronikZeile = chronikZeile(chronik());
         landunterFenster.oeffne();
         protokoll.schreibe("Landunter-Uhr", t.ort + ": " + wf.size() + " Warften, Windstau " + (t.bezuege.isEmpty() ? "ohne Konstanten" : "aus " + pegelNamen(t)));
     }
