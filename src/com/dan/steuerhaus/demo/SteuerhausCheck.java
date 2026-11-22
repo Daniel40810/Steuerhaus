@@ -428,7 +428,8 @@ public final class SteuerhausCheck {
      * und {@code ui} kennen FStyle, aber nicht den Renderer; nur {@code buehne} kennt {@code com.dan.lauf} (ohne demo),
      * {@code com.dan.core} (ohne gpu), seit W2 {@code com.dan.render.overlay} und seit W3 den Java2D-Kern von
      * {@code com.dan.kino}; {@code regie} ist wie der Kern (nur java.*); seit W4 {@code ausgabe} wie {@code buehne}, dazu der
-     * Kern von {@code com.dan.film}, ohne {@code ui}; kein Paket kennt ein Projekt oder LWJGL.
+     * Kern von {@code com.dan.film}, ohne {@code ui}; seit DB1 {@code messung} ohne AWT und Swing, mit {@code com.dan.store},
+     * {@code core.pruef}, {@code core.astro}, {@code core.raum}, dem Kern und {@code gezeiten}; kein Paket kennt ein Projekt oder LWJGL.
      */
     static void importregel(File src) throws Exception {
         File wurzel = new File(src, "com" + File.separator + "dan" + File.separator + "steuerhaus");
@@ -1707,6 +1708,15 @@ public final class SteuerhausCheck {
     static final double RUNDGANG_ABSTAND = 12;
 
     static boolean erlaubt(String paket, String p) {
+        // seit DB1: messung (der Sammler ohne Fenster) kennt java.* und java.sql, com.dan.store aus dem Renderer, die rechnenden
+        // Teile des Kerns (core.pruef, core.astro, core.raum), den Kern des Steuerhauses und gezeiten (Tafel, Vorhersage,
+        // Pegelonline); kein AWT, kein Swing, kein FStyle, keine Bühne
+        if (paket.equals("messung")) {
+            if (p.startsWith("com.dan.store") || p.startsWith("com.dan.core.pruef") || p.startsWith("com.dan.core.astro") || p.startsWith("com.dan.core.raum")) return true;
+            if (p.startsWith("com.dan.steuerhaus"))
+                return p.equals("com.dan.steuerhaus") || p.startsWith("com.dan.steuerhaus.gezeiten") || p.startsWith("com.dan.steuerhaus.messung");
+            return false;
+        }
         // seit W5: analyse (Qualitätsstufe, Protokoll) ist rein wie regie
         // seit X1: atlas hat die Rechte der buehne (lauf, Orte), ohne Renderer, Kern, Kino und Film; tafel ist wie ui
         // seit X3: rundgang hat die Rechte von atlas, dazu das Werkzeug der Aufbereitung (Osm, Wegenetz) für --wege

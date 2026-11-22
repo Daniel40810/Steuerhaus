@@ -1,6 +1,6 @@
 # com.dan.steuerhaus – der Werkzeugkasten für Szenen-Apps
 
-**Stand: Y1 Vergleich (21.11.2026); W5c Analyse und Betrieb (20.11.2026).** Werkbuch HalligHooge 110, 111, 113, 114, 116, 117, 121, 122, 126 bis 131. Eigenes NetBeans-Projekt neben dem Renderer (F174 A), gebunden an `com.dan.lauf` (F175 A), seit W2 an `com.dan.render.overlay` (die Kacheln der Einblendungen) und seit W3 an den Kern von `com.dan.kino` (Balken, Titel, Abspann; F194 A).
+**Stand: DB1 Messarchiv (22.11.2026); Y1 Vergleich (21.11.2026); W5c Analyse und Betrieb (20.11.2026).** Werkbuch HalligHooge 110, 111, 113, 114, 116, 117, 121, 122, 126 bis 131. Eigenes NetBeans-Projekt neben dem Renderer (F174 A), gebunden an `com.dan.lauf` (F175 A), seit W2 an `com.dan.render.overlay` (die Kacheln der Einblendungen) und seit W3 an den Kern von `com.dan.kino` (Balken, Titel, Abspann; F194 A).
 
 Das Steuerhaus ist die Anwendung zwischen den Bauteilen von FStyle und dem Bild des Renderers. Eine Szenen-App besteht aus einem Manifest, einer Szenendatei und wenigen Zeilen Java:
 
@@ -26,6 +26,10 @@ com.dan.steuerhaus.buehne   + com.dan.lauf, core,   Szenenapp, Katalog, Bedienun
 com.dan.steuerhaus.vergleich wie atlas            Vergleich, Mappe, Vergleichsansicht, Spieler (seit Y1)
 com.dan.steuerhaus.jahr     wie atlas               Jahresauftrag, Jahresmappe, Zeitplan, Jahresbild, Jahresansicht, Jahresfenster (Y3)
 com.dan.steuerhaus.gezeiten wie atlas, + core.astro Gezeitenauftrag, Gezeitentafel, Vorhersage, Mond, Kalenderansicht, Kalenderfenster (Z1)
+com.dan.steuerhaus.messung  java.*, java.sql,        Sammler (Hauptklasse, ohne Fenster), Messauftrag, Messarchiv, Uebernahme,
+                              com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1)
+                              core.pruef/astro/raum,
+                              Kern, gezeiten
 com.dan.steuerhaus.ausgabe  wie buehne, + Kern von   Ausgabe (Hauptklasse), Aufnahme, Korn, Kodierer (seit W4), Vergleichsfolge (Y1),
                                                     Jahresrechnung (Y3), Gezeitenrechnung (Z1)
                               com.dan.film
@@ -33,7 +37,7 @@ com.dan.steuerhaus.demo     alles                   SteuerhausCheck, RegieCheck 
                                                     KinoCheck, AusgabeCheck, AnalyseCheck (mit Karte)
 ```
 
-Importregel (Prüfstein 5, geprüft von `SteuerhausCheck`): Der Kern kennt weder AWT, Swing, FStyle noch den Renderer. `thema` und `ui` kennen FStyle, nicht den Renderer. `regie` und seit W5 `analyse` sind so rein wie der Kern: Regiebücher und Fahrten laufen ohne Bild (RegieCheck). Nur `buehne` (und `demo`) kennt `com.dan.lauf` (ohne `demo`), `com.dan.core` (ohne `gpu`), seit W2 `com.dan.render.overlay` und seit W3 `com.dan.kino` (ohne `kino.gl`). Kein Paket kennt ein Projekt, sonst `render`, `physics` oder LWJGL. Der Renderer kennt das Steuerhaus nicht.
+Importregel (Prüfstein 5, geprüft von `SteuerhausCheck`; seit DB1 auch von `MessungCheck`): Der Kern kennt weder AWT, Swing, FStyle noch den Renderer. `thema` und `ui` kennen FStyle, nicht den Renderer. `regie` und seit W5 `analyse` sind so rein wie der Kern: Regiebücher und Fahrten laufen ohne Bild (RegieCheck). Nur `buehne` (und `demo`) kennt `com.dan.lauf` (ohne `demo`), `com.dan.core` (ohne `gpu`), seit W2 `com.dan.render.overlay` und seit W3 `com.dan.kino` (ohne `kino.gl`). Seit DB1 kennt `messung` nur `java.*` (mit `java.sql`), `com.dan.store`, `core.pruef`, `core.astro`, `core.raum`, den Kern und `gezeiten` – kein AWT, kein Swing, kein FStyle. Kein Paket kennt ein Projekt, sonst `render`, `physics` oder LWJGL. Der Renderer kennt das Steuerhaus nicht.
 
 ## Manifest
 
@@ -243,3 +247,32 @@ Seit Z2b (Werkbuch HalligHooge 157, F250 A): Der gemessene Windstau ist das Mitt
 
 ## Watt-Fenster (Z3, Werkbuch HalligHooge 158)
 Paket `gezeiten` dazu: `Wattauftrag` (Schlüssel `watt.*`: Start, Ziel mit Umkreis, Rechteck und Zelle der Karte, Umkreis des Priels, Läufe, Gehgeschwindigkeit, Hinweis), `Watttafel` (die Datei `Hooge.watt` mit Weg, Sattel, Schwellen, Ereignissen der Läufe und Kopf; daneben `watt/hoehe.png`, 16 Bit in mm über −10 m, Süden unten, und `watt/land.jpg`), `Watt` (die Fenster: je Niedrigwasser der Gezeit des Kalenders plus Windstau von „trocken ab“ fallend bis „nass ab“ steigend, auf 1 s; Licht nach der Sonne; Stand der Karte im Einklang mit dem Fenster), `Windstaumessung` (wie bei der Uhr: Mittel der Pegel), `Wattansicht` (Karte mit dem Weg als Band, trocken Sand, nass Blau; Tag mit den trockenen Zeiten; die nächsten sieben Tage mit Dauer, Licht und Zeit dort für hin und zurück; Profil des Wegs mit dem Wasser), `Wattfenster`. `ausgabe.Wattrechnung` (`Ausgabe --watt`, ohne Bühne): Karte 5 m aus DGM1 und TrilaWatt, Sattel per Engpass-Suche, kürzester Weg über Zellen nicht tiefer als der Sattel, Schwellen als Median der Wasserstände am Anleger, wenn in den Läufen `watt.modell` der Priel am Sattel dessen Höhe kreuzt; Prüfung je Lauf mit den Schwellen der anderen. In der App: Menü Begleiter › Watt-Fenster … (Strg Umschalt W), Startseite Gruppe „Begleiter“; fehlt `Hooge.watt`, rechnet die App ihn auf Nachfrage; `--wattfenster` öffnet es nach dem ersten Bild (mit `--sekunden`: Woche, Niedrigwasser, Messung, eigener Wert, Bild). SteuerhausCheck Z3 Prüfsteine 1–5, `demo.WattCheck` 6–9. Modell, nicht zur Navigation.
+
+## Messarchiv (DB1)
+
+Seit DB1 (Werkbuch HalligHooge 167, F261–F265 A) hält `messung` fest, was die Quellen nur kurz hergeben: Ein Sammler
+ohne Fenster holt den Wasserstand von PEGELONLINE (30 Tage rückwirkend) und den Wind des DWD in ein Oracle-Schema der
+App, über `com.dan.store` (Einrichter, Db). Die App braucht die Datenbank nicht.
+
+```bash
+java -cp dist\HalligHooge.jar com.dan.steuerhaus.messung.Sammler --manifest src\szenen\Hooge.steuerhaus --abruf
+```
+
+Aufträge: `--probe` (Quellen ohne Datenbank), `--verbinden` (fragt einmal nach dem Passwort), `--einrichten`,
+`--uebernehmen --gebiet <ordner>` (Pegel als Maßstab, Wind, Orte, Ort ohne Pegel), `--abruf` (stündlich),
+`--pflege [--nur-plan] [--grenze MB]`, `--bericht`, `--pruefen [--gebiet <ordner>]`. Eine Sperre neben dem Protokoll
+lässt nie zwei Sammler zugleich laufen (Exit 3).
+
+| Klasse | Aufgabe |
+|---|---|
+| `Messauftrag` | Schlüssel `messung.*`: `db`, `sql`, `schema`, `praefix`, `passwort`, `srid`, `roh.monate`, `abruf.tage`, `grenze.mb`, `warnung`, `pegelonline`, `dwd`, `dwd.stunden`, `ort`; dazu `gezeiten.datei`, `landunter.krone`, `landunter.nass` |
+| `Abruf` | PEGELONLINE (`start` als Zeitpunkt nach ISO 8601), ZIP des DWD lesen |
+| `Ausreisser` | Grenzen −6 … 8 m, Spitze 0,3 m neben dem Median über ±15 min (wie `aufbereitung.Pegelonline`) |
+| `Scheitelsuche` | Hoch- und Niedrigwasser im gleitenden Mittel über 31 min, Fenster ±3 h, nur mit vollem Fenster |
+| `Messarchiv` | Tabellen über `java.sql`; Zeiten als Text mit `TO_DATE` gebunden (DATE bleibt indizierbar) |
+| `Aufbewahrung` | Wachstumsgrenze: Monatsfächer der Minutenwerte nach `roh.monate` weg, über `grenze.mb` das Älteste, sonst Einfügen aus |
+| `Uebernahme` | Bestand aus dem Gebiet (`pegel/`, `wind/`, `orte.txt`) und der Ort ohne Pegel aus der Gezeitentafel |
+| `Sammler` | die Aufträge, Sperre, Protokoll (`%USERPROFILE%\.steuerhaus\<Titel>\sammler.log`, höchstens 1 MB) |
+
+`demo.MessungCheck` prüft ohne Datenbank und ohne Netz: Skripte wie der Einrichter sie zerlegt, Scheitel an einer reinen
+Tide und an den Pegeln des Bestands, Ausreißer, Aufbewahrung und Grenze, Antworten der Quellen, Schlüssel, Importregel.
