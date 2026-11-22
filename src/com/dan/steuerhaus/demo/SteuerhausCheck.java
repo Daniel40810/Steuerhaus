@@ -1728,9 +1728,10 @@ public final class SteuerhausCheck {
         // seit Y1: vergleich (Beschreibung, Mappe, Spieler) hat die Rechte von atlas; die Ausgabe kennt vergleich
         // seit Y2: regler (Werte, Pult) ebenso
         // seit Y3: jahr (Mappe, Zeitplan, Bild, Ansicht, Fenster) ebenso; die Ausgabe rechnet die Mappe (Jahresrechnung)
-        // seit Z1: gezeiten (Tafel, Vorhersage, Mond, Kalender) ebenso, dazu die Partialtiden und Ephemeriden des Kerns (core.astro)
+        // seit Z1: gezeiten (Tafel, Vorhersage, Mond, Kalender) ebenso, dazu die Partialtiden und Ephemeriden des Kerns (core.astro);
+        // seit DB5 auch die harmonische Analyse und die Pegel (core.pruef) für Gezeitenanalyse
         boolean gez = paket.equals("gezeiten");
-        if (gez && p.startsWith("com.dan.core.astro")) return true;
+        if (gez && (p.startsWith("com.dan.core.astro") || p.startsWith("com.dan.core.pruef"))) return true;
         // seit DB2: chronik (Ansicht und Fenster der Chronik der Hochwasser) hat die Rechte von atlas
         // seit DB3: guete (Ansicht und Fenster Modell gegen Messung) ebenso
         boolean atlas = paket.equals("atlas") || rundgang || tonP || paket.equals("vergleich") || paket.equals("regler") || paket.equals("jahr") || gez || paket.equals("chronik")

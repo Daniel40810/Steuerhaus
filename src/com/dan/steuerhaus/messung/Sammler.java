@@ -50,6 +50,9 @@ import java.util.Map;
  *   --fach-weg TABELLE TAG   seit DB2: ein Fach (Partition) von Hand wegnehmen, etwa MITTEL 2009-01-01
  *   --guete                  seit DB3: Modell gegen Messung – die Datei des Modells (guete.modell, von Ausgabe --guete)
  *                            übernehmen, die Kennzahlen rechnen und guete.datei schreiben (nur bei Änderung)
+ *   --gezeiten               seit DB5: die Gezeit wächst mit – je Pegel ein Kandidat, geprüft an den jüngsten 30 Tagen,
+ *                            angenommen nur, wenn er besser ist; der Kalender (gezeiten.datei) ebenso; Mittelwasser je Monat.
+ *                            Sonst von selbst am 1. jedes Monats beim ersten Abruf ab gezeiten.wachsen.uhr (gezeiten.wachsen = an)
  * </pre>
  * Ausgabe auf der Konsole und in {@code %USERPROFILE%\.steuerhaus\<Titel>\sammler.log} (höchstens 1 MB, dann eine Stufe
  * zurück). Ein zweiter Lauf zur selben Zeit wartet nicht, er endet mit Exit 3. Exit 0: in Ordnung, 1: Fehler, 2: Aufruf.
@@ -63,6 +66,11 @@ public final class Sammler {
     /** Seit DB3: die Schlüssel guete.* (null: ohne Modell gegen Messung) und die Zone der App (Tag des HThw). */
     com.dan.steuerhaus.Guete.Auftrag guete;
     java.time.ZoneId zone = java.time.ZoneId.of("Europe/Berlin");
+    /** Seit DB5: die Schlüssel gezeiten.* (null: ohne Tidenkalender), Kopien der Tafel, monatlich von selbst und ab welcher Stunde. */
+    com.dan.steuerhaus.gezeiten.Gezeitenauftrag gez;
+    List<File> gezKopien = List.of();
+    boolean wachsen = true;
+    int wachsenUhr = 3;
     private final Scheitelsuche suche = new Scheitelsuche();
     private final Ausreisser ausreisser = new Ausreisser();
 
@@ -87,7 +95,8 @@ public final class Sammler {
                 case "--gebiet" -> gebiet = args[++i];
                 case "--nur-plan" -> nurPlan = true;
                 case "--grenze" -> grenze = Double.parseDouble(args[++i]);
-                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen", "--chronik", "--wind-nachladen", "--guete" ->
+                case "--probe", "--verbinden", "--einrichten", "--uebernehmen", "--abruf", "--pflege", "--bericht", "--pruefen", "--chronik", "--wind-nachladen", "--guete",
+                     "--gezeiten" ->
                         auftrag = args[i].substring(2);
                 case "--fach-weg" -> {
                     auftrag = "fach-weg";
@@ -102,7 +111,7 @@ public final class Sammler {
         }
         if (manifest == null || auftrag == null) {
             System.err.println("Aufruf: Sammler --manifest <datei> --probe|--verbinden|--einrichten|--uebernehmen --gebiet <ordner>|--abruf|--pflege|--bericht|--pruefen"
-                    + "|--chronik|--wind-nachladen|--fach-weg <TABELLE> <JJJJ-MM-TT>|--guete");
+                    + "|--chronik|--wind-nachladen|--fach-weg <TABELLE> <JJJJ-MM-TT>|--guete|--gezeiten");
             return 2;
         }
         Messauftrag a;
@@ -122,6 +131,12 @@ public final class Sammler {
             Sammler s = new Sammler(a, log);
             s.guete = com.dan.steuerhaus.Guete.Auftrag.lies(mf);                      // seit DB3
             s.zone = java.time.ZoneId.of(mf.text("app.zone", "Europe/Berlin"));
+            s.gez = com.dan.steuerhaus.gezeiten.Gezeitenauftrag.lies(mf);                // seit DB5
+            List<File> kop = new ArrayList<>();
+            for (String k : mf.text("gezeiten.kopie", "").split(";")) if (!k.isBlank()) kop.add(Messauftrag.norm(mf.relativ(k.strip())));
+            s.gezKopien = kop;
+            s.wachsen = !"aus".equalsIgnoreCase(mf.text("gezeiten.wachsen", "an").strip());
+            s.wachsenUhr = (int) Messauftrag.zahl(mf.text("gezeiten.wachsen.uhr", "3"), 3);
             log.zeile("Sammler " + auftrag + " · " + a.name() + " · " + a.db());
             try {
                 return switch (auftrag) {
@@ -146,6 +161,7 @@ public final class Sammler {
                     case "chronik" -> s.mitSperre(s::chronikAllein);
                     case "wind-nachladen" -> s.mitSperre(s::windNachladen);
                     case "guete" -> s.mitSperre(s::guete);
+                    case "gezeiten" -> s.mitSperre(s::gezeiten);
                     case "fach-weg" -> {
                         String t = fachTabelle, d = fachTag;
                         yield s.mitSperre(() -> s.fachWeg(t, d));
@@ -259,7 +275,7 @@ public final class Sammler {
         String p = a.praefix();
         Einrichter e = new Einrichter();
         e.praefix = p;
-        e.version = 4;                                                              // seit DB4 (3: DB3, 2: DB2)
+        e.version = 5;                                                              // seit DB5 (4: DB4, 3: DB3, 2: DB2)
         e.sichten = a.sichten().toArray(String[]::new);
         e.metadaten = new String[] {p + "STATION.LAGE", p + "ORT.LAGE"};
         e.srid = a.srid();
@@ -278,7 +294,10 @@ public final class Sammler {
                 new Einrichter.Soll("Werte Modell gegen Messung (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "VERGLEICH_V", -1),
                 new Einrichter.Soll("Paare der Scheitel (seit DB3)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "SCHEITEL_PAAR_V", -1),
                 new Einrichter.Soll("Wind Modell gegen Messung (seit DB4)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "WIND_VERGLEICH_V", -1),
-                new Einrichter.Soll("Tagesmittel der Pegel (seit DB4)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "TAGESMITTEL_V", -1));
+                new Einrichter.Soll("Tagesmittel der Pegel (seit DB4)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "TAGESMITTEL_V", -1),
+                new Einrichter.Soll("Analysen der Gezeit (seit DB5)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "ANALYSE_V", -1),
+                new Einrichter.Soll("Tiden der Analysen (seit DB5)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "TIDE_VERLAUF_V", -1),
+                new Einrichter.Soll("Mittelwasser je Monat (seit DB5)", "SELECT TO_CHAR(COUNT(*)) FROM " + p + "MITTELWASSER_V", -1));
         return e;
     }
 
@@ -335,6 +354,17 @@ public final class Sammler {
             fehler += dwd(ar, false);
             int v = verdichtenAlle(ar), s = scheitelAlle(ar), z = schaetzen(ar);
             Aufbewahrung.Plan nachher = pflege(ar, false, Double.NaN);
+            try {                                                                    // seit DB5: am 1. des Monats wächst die Gezeit
+                if (gezeitenFaellig(ar)) fehler += gezeitenRechnen(ar, false) == 0 ? 0 : 1;
+            } catch (Exception x) {
+                fehler++;
+                log.zeile("FEHLER Gezeiten: " + x.getMessage());
+                try {
+                    ar.abruf("GEZEITEN", Instant.now(), 0, 0, 0, 1, "FEHLER " + x.getMessage());
+                } catch (SQLException y) {
+                    log.zeile("FEHLER Protokoll: " + y.getMessage());
+                }
+            }
             try {
                 chronik(ar);
             } catch (IOException | SQLException x) {
@@ -447,9 +477,14 @@ public final class Sammler {
     }
 
     private final Map<Integer, Vorhersage> vorhersagen = new HashMap<>();
+    private final Map<Integer, Long> analysen = new HashMap<>();
 
+    /** Seit DB5 die geltende Gezeit: aus der jüngsten angenommenen Analyse (MESSUNG), sonst aus den 30 Tagen der Übernahme. */
     private Vorhersage vorhersage(Messarchiv ar, int id) throws SQLException {
-        if (!vorhersagen.containsKey(id)) vorhersagen.put(id, ar.vorhersage(id, Uebernahme.HERKUNFT_PEGEL));
+        if (!vorhersagen.containsKey(id)) {
+            vorhersagen.put(id, Gezeitenbau.geltend(ar, id));
+            analysen.put(id, ar.vorhersage(id, Gezeitenbau.HERKUNFT) == null ? null : ar.geltendeAnalyse(id, Gezeitenbau.PEGEL));
+        }
         return vorhersagen.get(id);
     }
 
@@ -474,7 +509,7 @@ public final class Sammler {
                 double g = v == null ? Double.NaN : v.wert(Instant.ofEpochSecond(s.zeit()));
                 l.add(new Messarchiv.Eintrag(s.art(), s.zeit(), s.hoehe(), g, Double.isNaN(g) ? Double.NaN : s.hoehe() - g));
             }
-            n += ar.scheitel(st.id(), MESSUNG, l);
+            n += ar.scheitel(st.id(), MESSUNG, l, analysen.get(st.id()));
         }
         return n;
     }
@@ -532,7 +567,56 @@ public final class Sammler {
             double stau = s / nb;
             l.add(new Messarchiv.Eintrag('H', t, e.hoehe() + stau, e.hoehe(), stau));
         }
-        return ar.scheitel(ort.id(), SCHAETZUNG, l);
+        Messarchiv.Station sb = gez == null ? null : pegel.get(gez.bezug());
+        return ar.scheitel(ort.id(), SCHAETZUNG, l, sb == null ? null : ar.geltendeAnalyse(sb.id(), Gezeitenbau.KALENDER));
+    }
+
+    // ------------------------------------------------------------------ seit DB5: Gezeiten wachsen mit
+
+    /**
+     * Fällig am 1. des Monats ab {@code gezeiten.wachsen.uhr} (Ortszeit), wenn in diesem Monat noch kein Lauf ohne Fehler war;
+     * nach einem Fehler erst 20 Stunden später wieder.
+     */
+    boolean gezeitenFaellig(Messarchiv ar) throws SQLException {
+        if (!wachsen || gez == null) return false;
+        java.time.ZonedDateTime jetzt = java.time.ZonedDateTime.now(zone), ab = jetzt.toLocalDate().withDayOfMonth(1).atTime(wachsenUhr, 0).atZone(zone);
+        if (jetzt.isBefore(ab)) return false;
+        Instant ok = ar.letzterAbruf("GEZEITEN"), versuch = ar.letzterVersuch("GEZEITEN");
+        if (ok != null && !ok.isBefore(ab.toInstant())) return false;
+        return versuch == null || versuch.isBefore(Instant.now().minusSeconds(20 * 3600));
+    }
+
+    int gezeiten() throws Exception {
+        if (gez == null) {
+            log.zeile("Im Manifest fehlen gezeiten.ort und gezeiten.bezug – die App hat keinen Tidenkalender.");
+            return 2;
+        }
+        try (Connection c = verbinde(false)) {
+            return gezeitenRechnen(new Messarchiv(c, a.praefix(), a.srid()), true);
+        }
+    }
+
+    /** Ein Lauf von {@link Gezeitenbau}; mit neuer Tafel die Schätzung am Ort neu (soweit Minutenwerte da sind). Exit 0 oder 1. */
+    int gezeitenRechnen(Messarchiv ar, boolean chronikDanach) throws Exception {
+        Instant t0 = Instant.now();
+        log.zeile("Gezeiten: Kandidaten je Pegel, Prüfung an den jüngsten " + (int) com.dan.steuerhaus.gezeiten.Gezeitenanalyse.PRUEF_TAGE + " Tagen");
+        Gezeitenbau.Bilanz b = Gezeitenbau.rechnen(ar, a, gez, gezKopien, zone, log::zeile);
+        vorhersagen.clear();
+        analysen.clear();
+        if (b.kalender()) {
+            log.zeile("Gezeiten: " + a.gezeiten().getName() + " neu geschrieben" + (gezKopien.isEmpty() ? "" : " (mit " + gezKopien.size() + " Kopie)"));
+            Messarchiv.Station ort = a.ortSchluessel() == null ? null : ar.stationen("ORT").get(a.ortSchluessel());
+            Messarchiv.Station pb = ar.stationen("PEGEL").get(gez.bezug());
+            Long roh = pb == null ? null : ar.erste("ROH", pb.id(), W);
+            if (ort != null && roh != null) {
+                int weg = ar.scheitelWeg(ort.id(), SCHAETZUNG, roh + 1800), neu = schaetzen(ar);
+                log.zeile(String.format(Locale.GERMAN, "Gezeiten: Schätzung am Ort neu ab %s – %d weg, %d neu", Messarchiv.zeit(roh + 1800), weg, neu));
+            }
+        }
+        if (chronikDanach) chronik(ar);
+        ar.abruf("GEZEITEN", t0, sekunden(t0), b.scheitel(), 0, b.fehler(), b.kurz());
+        log.zeile("Gezeiten: " + b.kurz());
+        return b.fehler() == 0 ? 0 : 1;
     }
 
     // ------------------------------------------------------------------ seit DB2: Chronik, Wind nachladen, Fach von Hand
@@ -721,12 +805,22 @@ public final class Sammler {
             abschnitt(ar, "Lücken über 60 min in den Minutenwerten (Pegel · Lücken · längste in min)",
                     "SELECT s.SCHLUESSEL, COUNT(*), ROUND(MAX(l.D)) FROM (SELECT STATION_ID, (ZEIT - LAG(ZEIT) OVER (PARTITION BY STATION_ID ORDER BY ZEIT)) * 1440 D FROM "
                             + p + "ROH) l JOIN " + p + "STATION s ON s.STATION_ID = l.STATION_ID WHERE l.D > 60 GROUP BY s.SCHLUESSEL ORDER BY 3 DESC", 30);
-            abschnitt(ar, "Modell gegen Messung (Lauf · Pegel · Werte · RMSE · Bias · Mittelwasser · Bias ohne MW · Skill · HW · Versatz min · m · Windstau-Anteil · gegen HThw)",
-                    "SELECT LAUF, SCHLUESSEL, WERTE, RMSE, BIAS, MITTELWASSER, BIAS_OHNE_MW, SKILL, HW, HW_ZEIT, HW_HOEHE, STAU_ANTEIL, GEGEN_HTHW FROM " + p
+            abschnitt(ar, "Modell gegen Messung (Lauf · Pegel · Werte · RMSE · Bias · Mittelwasser · Bias ohne MW · ohne Windstau: MW · Bias ohne MW · Skill · HW · "
+                            + "Versatz min · m · Windstau-Anteil · gegen HThw)",
+                    "SELECT LAUF, SCHLUESSEL, WERTE, RMSE, BIAS, MITTELWASSER, BIAS_OHNE_MW, MW_RUHIG, BIAS_OHNE_MW_RUHIG, SKILL, HW, HW_ZEIT, HW_HOEHE, STAU_ANTEIL, GEGEN_HTHW FROM " + p
                             + "GUETE_V ORDER BY VON, LAUF, SCHLUESSEL", 80);
             abschnitt(ar, "Wind Modell gegen Messung (Lauf · Station · Werte · Faktor · Schub · Bias m/s · RMSE · Richtung ° · Sturm: Werte · Faktor · Schub · Richtung)",
                     "SELECT LAUF, NAME, WERTE, FAKTOR, ROUND(SCHUB, 3), BIAS, RMSE, RICHTUNG, STURM_WERTE, STURM_FAKTOR, ROUND(STURM_SCHUB, 3), STURM_RICHTUNG FROM " + p
                             + "GUETE_WIND_V ORDER BY VON, LAUF, SCHLUESSEL", 30);
+            abschnitt(ar, "Gezeiten: Analysen, die jüngsten zuerst (Stand · Pegel · Zweck · Tage · Tiden · Prüfzeit · Hoch- und Niedrigwasser · Fehler Höhe m · Zeit min · "
+                            + "geltend davor: Höhe · Zeit · Faktor · angenommen)",
+                    "SELECT TO_CHAR(STAND, 'YYYY-MM-DD HH24:MI'), SCHLUESSEL, ZWECK, TAGE, TIDEN, TO_CHAR(PRUEF_VON, 'DD.MM.') || '–' || TO_CHAR(PRUEF_BIS, 'DD.MM.'), PRUEF_N, "
+                            + "FEHLER_HOEHE, FEHLER_ZEIT, ALT_FEHLER_HOEHE, ALT_FEHLER_ZEIT, FAKTOR, ANGENOMMEN FROM " + p + "ANALYSE_V ORDER BY ANALYSE_ID DESC", 30);
+            abschnitt(ar, "Gezeiten: M2 und S2 der angenommenen Analysen (Pegel · Zweck · Stand · Tage · Tide · Amplitude · Phase)",
+                    "SELECT SCHLUESSEL, ZWECK, TO_CHAR(STAND, 'YYYY-MM-DD'), TAGE, TIDE, AMPLITUDE, PHASE FROM " + p + "TIDE_VERLAUF_V WHERE ANGENOMMEN = 'J' AND TIDE IN ('M2', 'S2') "
+                            + "AND SCHLUESSEL IN ('PELLWORM_ANLEGER', 'WITTDÜN') ORDER BY SCHLUESSEL, ZWECK, STAND, TIDE", 40);
+            abschnitt(ar, "Mittelwasser je Monat ohne Windstau (Pegel · Monat · Mittel · mit den Sturmtagen · Unterschied · Anteil ruhig %)",
+                    "SELECT SCHLUESSEL, TO_CHAR(MONAT, 'YYYY-MM'), MITTEL, MITTEL_ALLE, STURMANTEIL, ANTEIL_RUHIG FROM " + p + "MITTELWASSER_V ORDER BY SCHLUESSEL, MONAT", 120);
             Aufbewahrung.Plan pl = Aufbewahrung.plan(ar.faecher("ROH", 1), ar.faecher("MITTEL", 12), LocalDate.now(ZoneOffset.UTC), a.rohMonate(), platz, a.grenzeMb());
             log.zeile("Nächste Pflege: " + (pl.leer() ? "nichts wegzunehmen" : String.join("; ", pl.gruende())));
         }

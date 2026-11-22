@@ -55,7 +55,8 @@ public record Messauftrag(String name, File db, File sql, String schema, String 
     public List<String> sichten() {
         return List.of(praefix + "STATION_V", praefix + "FUELLSTAND_V", praefix + "HOCHWASSER_V", praefix + "STURMFLUT_V", praefix + "SCHAETZUNG_V",
                 praefix + "LANDUNTER_V", praefix + "VERGLEICH_V", praefix + "SCHEITEL_PAAR_V", praefix + "GUETE_V",       // seit DB3 diese drei
-                praefix + "WIND_VERGLEICH_V", praefix + "TAGESMITTEL_V", praefix + "GUETE_WIND_V");                          // seit DB4 diese drei
+                praefix + "WIND_VERGLEICH_V", praefix + "TAGESMITTEL_V", praefix + "GUETE_WIND_V",                           // seit DB4 diese drei
+                praefix + "ANALYSE_V", praefix + "TIDE_VERLAUF_V", praefix + "MITTELWASSER_V");                              // seit DB5 diese drei
     }
 
     static File norm(File f) { return f.toPath().toAbsolutePath().normalize().toFile(); }

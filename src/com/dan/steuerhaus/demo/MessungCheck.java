@@ -40,7 +40,10 @@ import java.util.zip.ZipOutputStream;
  * (Werkbuch HalligHooge 171): 12 die Datei Modell gegen Messung (hin und zurück, Kennung), 13 die Kennzahlen an einem
  * Handbeispiel, 14 das Raster des Modells und der Messung, 15 die Schlüssel {@code guete.*}. Seit DB4 (Werkbuch HalligHooge
  * 173): 12 mit Wind und Mittelwasser (und einer Zeile im Format von DB3), 13 mit dem Bias ohne Mittelwasser, 14 mit dem Wind
- * (Richtung, Zelle am Rand), 15 mit den Windstationen, 16 die Kennzahlen des Winds an einem Handbeispiel.
+ * (Richtung, Zelle am Rand), 15 mit den Windstationen, 16 die Kennzahlen des Winds an einem Handbeispiel. Seit DB5 (Werkbuch
+ * HalligHooge 176): 1 mit 19 Tabellen, 17 die neuen Tiden (Auswahl nach Rayleigh, Knotenfaktoren, Analyse einer Probereihe), 18 die
+ * Regeln für Prüfzeit und Annahme an Handbeispielen, 19 das Mittelwasser ohne Windstau, 20 (mit {@code --gebiet}) die Analyse nach
+ * dem Umzug nach gezeiten.Gezeitenanalyse gegen die Zahlen von Z1.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.MessungCheck --manifest src\szenen\Hooge.steuerhaus [--gebiet daten\gebiet] [--quellen ..\Steuerhaus\src]
  * </pre>
@@ -69,7 +72,7 @@ public final class MessungCheck {
         if (manifest == null) throw new IllegalArgumentException("--manifest fehlt");
         Manifest m = Manifest.lies(manifest);
         Messauftrag a = Messauftrag.lies(m);
-        System.out.println("MessungCheck (DB1 bis DB4): " + manifest);
+        System.out.println("MessungCheck (DB1 bis DB5): " + manifest);
         // 6 Schlüssel
         List<String> f6 = new ArrayList<>();
         if (a == null) f6.add("messung.db fehlt");
@@ -99,6 +102,10 @@ public final class MessungCheck {
         gueteRaster();
         gueteSchluessel(m);
         windzahlen();
+        neueTiden();                                                                  // seit DB5
+        wachsen();
+        mittelwasser();
+        if (gebiet != null) umzug(gebiet);
         if (quellen != null) {
             int v0 = SteuerhausCheck.verstoesse;
             SteuerhausCheck.importregel(quellen);
@@ -364,6 +371,132 @@ public final class MessungCheck {
                         + ga.windSturm() + " m/s, " + Math.round(ga.mittelwasserTage()) + " Tage, " + ga.datei().getName() : f.toString());
     }
 
+    // ------------------------------------------------------------------ 17–20 seit DB5
+
+    static List<String> namen(List<Partialtide> l) {
+        List<String> n = new ArrayList<>();
+        for (Partialtide p : l) n.add(p.name);
+        return n;
+    }
+
+    static void neueTiden() {
+        List<String> f = new ArrayList<>();
+        List<Partialtide> k = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.tiden(com.dan.steuerhaus.gezeiten.Gezeitenanalyse.KANDIDATEN);
+        Object[][] faelle = {{30.0, List.of("M2", "N2", "2SM2", "2MS6", "MK3", "M8"), List.of("MU2", "2N2", "L2", "K2", "P1", "NU2", "MSN6", "T2")},
+                {41.0, List.of("MU2", "L2", "MSN6"), List.of("2N2", "NU2", "K2", "P1")},
+                {210.0, List.of("K2", "P1", "NU2", "2N2"), List.of("T2")}};
+        for (Object[] fa : faelle) {
+            List<String> w = namen(com.dan.steuerhaus.gezeiten.Gezeitenanalyse.waehlen(k, (Double) fa[0] * 24, null));
+            for (Object n : (List<?>) fa[1]) if (!w.contains(n)) f.add(fa[0] + " Tage ohne " + n);
+            for (Object n : (List<?>) fa[2]) if (w.contains(n)) f.add(fa[0] + " Tage mit " + n);
+        }
+        String[] jahr = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.kandidaten(370 * 24);
+        List<String> wj = namen(com.dan.steuerhaus.gezeiten.Gezeitenanalyse.waehlen(com.dan.steuerhaus.gezeiten.Gezeitenanalyse.tiden(jahr), 370 * 24, null));
+        for (String n : new String[] {"T2", "SA", "SSA"}) if (!wj.contains(n)) f.add("370 Tage ohne " + n);
+        if (com.dan.steuerhaus.gezeiten.Gezeitenanalyse.kandidaten(300 * 24).length != com.dan.steuerhaus.gezeiten.Gezeitenanalyse.KANDIDATEN.length) f.add("Sa, Ssa vor einem Jahr");
+        // Knotenfaktoren der Flachwassertiden aus ihren Eltern
+        double[] m2 = Partialtide.M2.fu(30), k1 = Partialtide.K1.fu(30), mk3 = Partialtide.MK3.fu(30), sm2 = Partialtide.ZWEI_SM2.fu(30), m8 = Partialtide.M8.fu(30);
+        if (Math.abs(mk3[0] - m2[0] * k1[0]) > 1e-12 || Math.abs(mk3[1] - m2[1] - k1[1]) > 1e-12) f.add("MK3 nicht M2 · K1");
+        if (Math.abs(sm2[0] - m2[0]) > 1e-12 || Math.abs(sm2[1] + m2[1]) > 1e-12) f.add("2SM2 nicht 2·S2 − M2");
+        if (Math.abs(m8[0] - Math.pow(m2[0], 4)) > 1e-12) f.add("M8 nicht M2⁴");
+        // Analyse einer Probereihe: 60 Tage, 10 min, mit Flachwassertiden, Rauschen ± 1 cm und einem Sturm über 2 Tage
+        List<Vorhersage.Konstante> soll = List.of(new Vorhersage.Konstante(Partialtide.M2, 1.4, 350), new Vorhersage.Konstante(Partialtide.S2, 0.45, 37),
+                new Vorhersage.Konstante(Partialtide.N2, 0.17, 337), new Vorhersage.Konstante(Partialtide.K1, 0.05, 20), new Vorhersage.Konstante(Partialtide.O1, 0.10, 240),
+                new Vorhersage.Konstante(Partialtide.M4, 0.15, 200), new Vorhersage.Konstante(Partialtide.MS4, 0.10, 220), new Vorhersage.Konstante(Partialtide.ZWEI_MS6, 0.08, 60),
+                new Vorhersage.Konstante(Partialtide.ZWEI_SM2, 0.05, 250), new Vorhersage.Konstante(Partialtide.MK3, 0.02, 100));
+        Vorhersage v = new Vorhersage(0.1, soll);
+        int n = 60 * 144;
+        long s0 = Instant.parse("2027-01-01T00:05:00Z").getEpochSecond();
+        double[] t = new double[n], y = new double[n];
+        java.util.Random r = new java.util.Random(5);
+        for (int i = 0; i < n; i++) {
+            t[i] = s0 + 600.0 * i;
+            double d = (t[i] - s0) / 86_400.0 - 20;
+            y[i] = v.wert(Instant.ofEpochSecond((long) t[i])) + 0.6 * Math.exp(-d * d) + 0.01 * (2 * r.nextDouble() - 1);
+        }
+        var an = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.robust(t, y, 600, 0.25, com.dan.steuerhaus.gezeiten.Gezeitenanalyse.KANDIDATEN);
+        StringBuilder ist = new StringBuilder();
+        for (Vorhersage.Konstante kk : soll) {
+            var x = an.ergebnis().tide(kk.tide().name);
+            if (x == null) {
+                f.add(kk.tide().name + " fehlt");
+                continue;
+            }
+            double da = x.amplitude() - kk.amplitude(), dg = com.dan.core.astro.FAngle.norm180(x.phaseGrad() - kk.phaseGrad());
+            if (Math.abs(da) > 0.005 || (kk.amplitude() >= 0.04 && Math.abs(dg) > 5)) f.add(String.format(Locale.ROOT, "%s %+.4f m %+.1f°", kk.tide().name, da, dg));
+            if (kk.tide() == Partialtide.ZWEI_MS6 || kk.tide() == Partialtide.ZWEI_SM2)
+                ist.append(String.format(Locale.GERMAN, "%s %.3f m %.1f° (soll %.3f m %.0f°); ", kk.tide().name, x.amplitude(), x.phaseGrad(), kk.amplitude(), kk.phaseGrad()));
+        }
+        if (Math.abs(an.ergebnis().mittel() - 0.1) > 0.01) f.add(String.format(Locale.ROOT, "Z0 %.3f", an.ergebnis().mittel()));
+        if (an.genutzt() > n - 144) f.add("Sturm nicht ausgelassen (" + an.genutzt() + " von " + n + ")");
+        pruefe(f.isEmpty(), "Prüfstein 17: neue Tiden (Auswahl nach Rayleigh mit den größeren ausgefallenen, Sa und Ssa erst ab einem Jahr, Knotenfaktoren aus den Eltern, "
+                + "Analyse einer Probereihe mit Sturm)", f.isEmpty() ? ist.toString() + an.analysiert() + " Tiden, " + an.genutzt() + " von " + n + " Werten ohne Windstau" : f.toString());
+    }
+
+    static void wachsen() {
+        List<String> f = new ArrayList<>();
+        long d = 86_400;
+        long[] a = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.pruefzeit(0, 41 * d, 30 * d), b = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.pruefzeit(0, 50 * d, 30 * d),
+                c = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.pruefzeit(0, 81 * d, 30 * d), e = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.pruefzeit(0, 35 * d, 30 * d),
+                g = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.pruefzeit(0, 41 * d, Long.MIN_VALUE);
+        if (a == null || a[0] != 30 * d || a[1] != 41 * d) f.add("41 Tage: " + java.util.Arrays.toString(a));
+        if (b == null || b[0] != 30 * d) f.add("50 Tage: " + java.util.Arrays.toString(b));
+        if (c == null || c[0] != 51 * d) f.add("81 Tage: " + java.util.Arrays.toString(c));
+        if (e != null) f.add("35 Tage: " + java.util.Arrays.toString(e));
+        if (g == null || g[0] != 30 * d) f.add("ohne geltende: " + java.util.Arrays.toString(g));
+        double[] alt = {40, 0, 18, 0, 0.158};
+        Object[][] faelle = {{new double[] {40, 0, 12, 0, 0.140}, true, "Höhe und Zeit besser"}, {new double[] {40, 0, 18, 0, 0.164}, false, "Höhe 6 mm schlechter"},
+                {new double[] {40, 0, 17.1, 0, 0.158}, false, "Zeit nur 0,9 min besser"}, {new double[] {40, 0, 16.9, 0, 0.162}, true, "Zeit besser, Höhe 4 mm schlechter"},
+                {new double[] {40, 0, 10, 0, 0.150}, true, "geltend ohne Prüfwerte"}, {new double[] {9, 0, 10, 0, 0.10}, false, "nur 9 Hoch- und Niedrigwasser"}};
+        for (int i = 0; i < faelle.length; i++) {
+            Object[] fa = faelle[i];
+            boolean ist = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.besser((double[]) fa[0], i == 4 ? null : alt);
+            if (ist != (Boolean) fa[1]) f.add(fa[2] + ": " + ist);
+        }
+        pruefe(f.isEmpty(), "Prüfstein 18: Prüfzeit (die jüngsten 30 Tage, nicht vor dem Ende der geltenden Analyse, 30 Tage Analyse davor, mindestens 7) und Annahme "
+                + "(0,5 cm oder 1 min besser, keins schlechter)", f.isEmpty() ? "5 Prüfzeiten, 6 Entscheidungen wie erwartet" : f.toString());
+    }
+
+    static void mittelwasser() {
+        List<String> f = new ArrayList<>();
+        Vorhersage v = new Vorhersage(0.15, List.of(new Vorhersage.Konstante(Partialtide.M2, 1.4, 350), new Vorhersage.Konstante(Partialtide.S2, 0.45, 37),
+                new Vorhersage.Konstante(Partialtide.M4, 0.15, 200)));
+        int n = 40 * 144;
+        long s0 = Instant.parse("2026-10-12T14:35:00Z").getEpochSecond();
+        double[] t = new double[n], y = new double[n];
+        for (int i = 0; i < n; i++) {
+            t[i] = s0 + 600.0 * i;
+            double d = ((t[i] - s0) / 86_400.0 - 14) / 1.5;
+            y[i] = v.wert(Instant.ofEpochSecond((long) t[i])) + 0.8 * Math.exp(-d * d);
+            if (i % 97 == 0) y[i] = Double.NaN;
+        }
+        double[] m = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.mittelOhneStau(t, y, 600, v, 0.25, s0, s0 + 40 * 86_400L);
+        if (Math.abs(m[0] - 0.15) > 0.01) f.add(String.format(Locale.ROOT, "ohne Windstau %.3f", m[0]));
+        if (!(m[1] > 0.19)) f.add(String.format(Locale.ROOT, "mit Sturm %.3f", m[1]));
+        if (!(m[2] < m[3] * 0.95)) f.add("Sturm nicht ausgelassen");
+        var mo = com.dan.steuerhaus.gezeiten.Gezeitenanalyse.monatsmittel(t, y, 600, v, 0.25);
+        if (mo.size() != 2) f.add(mo.size() + " Monate statt 2");
+        for (var x : mo) if (Math.abs(x.mittel() - 0.15) > 0.02) f.add(String.format(Locale.ROOT, "Monat %s: %.3f", Instant.ofEpochSecond(x.beginn()), x.mittel()));
+        pruefe(f.isEmpty(), "Prüfstein 19: Mittelwasser ohne Windstau (Z₀ 0,15 m, Sturm 0,8 m über 3 Tage, Lücken) – über alles auf 1 cm, je Monat auf 2 cm (die Ränder des Sturms bleiben unter 0,25 m drin)",
+                f.isEmpty() ? String.format(Locale.GERMAN, "ohne Windstau %.3f m, mit Sturm %.3f m; %d von %d Werten; Monate %s", m[0], m[1], (int) m[2], (int) m[3],
+                        mo.stream().map(x -> String.format(Locale.GERMAN, "%.3f", x.mittel())).toList()) : f.toString());
+    }
+
+    static void umzug(File gebiet) throws Exception {
+        List<String> f = new ArrayList<>();
+        java.util.Map<String, com.dan.core.pruef.Pegel> pg = com.dan.core.pruef.Pegel.lies(gebiet);
+        com.dan.core.pruef.Pegel p = pg.get("PELLWORM_ANLEGER");
+        String ist = "–";
+        if (p == null) f.add("Pegel Pellworm fehlt im Gebiet");
+        else {
+            var a = com.dan.steuerhaus.ausgabe.Gezeitenrechnung.robust(p, 0.25);
+            ist = String.format(Locale.GERMAN, "%d von %d Werten, Rest %.4f m, %d Tiden", a.genutzt(), a.gesamt(), a.ergebnis().restRms(), a.ergebnis().tiden().size());
+            if (a.genutzt() != 21536 || a.gesamt() != 43188 || Math.abs(a.ergebnis().restRms() - 0.1696) > 0.00006 || a.ergebnis().tiden().size() != 14) f.add(ist);
+        }
+        pruefe(f.isEmpty(), "Prüfstein 20: Analyse der Ausgabe nach dem Umzug nach gezeiten.Gezeitenanalyse gegen Z1 (Pellworm, 30 Tage: 21 536 von 43 188, Rest 0,1696 m, 14 Tiden)",
+                f.isEmpty() ? ist : f.toString());
+    }
+
     static void windzahlen() {
         List<String> f = new ArrayList<>();
         // Modell, Messung (auf 10 m), Richtungen: zwei unter 5 m/s (nur Bias, RMSE), drei darüber, zwei davon Sturm ab 15 m/s
@@ -421,7 +554,7 @@ public final class MessungCheck {
                 if (s.definition().contains("--")) f.add("Kommentar in der Spalte " + s.tabelle() + "." + s.name());
             }
         }
-        if (tabellen.size() != 16) f.add(tabellen.size() + " Tabellen statt 16: " + tabellen);                  // seit DB4: 16 (DB3: 14, DB1, DB2: 10)
+        if (tabellen.size() != 19) f.add(tabellen.size() + " Tabellen statt 19: " + tabellen);                  // seit DB5: 19 (DB4: 16, DB3: 14, DB1, DB2: 10)
         if (!sichten.equals(new LinkedHashSet<>(a.sichten()))) f.add("Sichten " + sichten + " statt " + a.sichten());
         pruefe(f.isEmpty(), "Prüfstein 1: Skripte für den Einrichter (zerlegt wie SQL Developer, Spalten mit bekanntem Typ, Präfix)",
                 f.isEmpty() ? anweisungen + " Anweisungen, " + tabellen.size() + " Tabellen mit " + spalten + " Spalten, " + sequenzen.size() + " Sequenzen, " + indizes.size()

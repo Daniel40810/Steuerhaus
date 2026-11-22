@@ -404,10 +404,13 @@ public final class Messarchiv {
     public record Eintrag(char art, long zeit, double hoehe, double gezeit, double stau) { }
 
     /** Fügt Scheitel ein (Herkunft MESSUNG oder SCHAETZUNG); vorhandene Schlüssel bleiben. Gibt die Zahl. */
-    public int scheitel(int station, String herkunft, List<Eintrag> l) throws SQLException {
+    public int scheitel(int station, String herkunft, List<Eintrag> l) throws SQLException { return scheitel(station, herkunft, l, null); }
+
+    /** Seit DB5 mit der Analyse, aus der die Gezeit stammt (HH_ANALYSE; null: die Konstanten der Übernahme oder der Tafel). */
+    public int scheitel(int station, String herkunft, List<Eintrag> l, Long analyse) throws SQLException {
         if (l.isEmpty()) return 0;
         try (PreparedStatement st = c.prepareStatement("INSERT /*+ IGNORE_ROW_ON_DUPKEY_INDEX(" + p + "SCHEITEL, " + p + "SCHEITEL_PK) */ INTO " + p
-                + "SCHEITEL (STATION_ID, ART, ZEIT, HOEHE, GEZEIT, STAU, HERKUNFT) VALUES (?, ?, " + TD + ", ?, ?, ?, ?)")) {
+                + "SCHEITEL (STATION_ID, ART, ZEIT, HOEHE, GEZEIT, STAU, HERKUNFT, ANALYSE_ID) VALUES (?, ?, " + TD + ", ?, ?, ?, ?, ?)")) {
             for (Eintrag e : l) {
                 st.setInt(1, station);
                 st.setString(2, String.valueOf(e.art()));
@@ -416,6 +419,8 @@ public final class Messarchiv {
                 setze(st, 5, Double.isNaN(e.gezeit()) ? Double.NaN : Math.round(e.gezeit() * 1000.0) / 1000.0);
                 setze(st, 6, Double.isNaN(e.stau()) ? Double.NaN : Math.round(e.stau() * 1000.0) / 1000.0);
                 st.setString(7, herkunft);
+                if (analyse == null) st.setNull(8, Types.NUMERIC);
+                else st.setLong(8, analyse);
                 st.addBatch();
             }
             st.executeBatch();
@@ -461,6 +466,168 @@ public final class Messarchiv {
         try (Statement st = c.createStatement(); ResultSet r = st.executeQuery("SELECT COUNT(*) FROM " + p + f.tabelle() + " PARTITION (" + f.partition() + ")")) {
             r.next();
             return r.getLong(1);
+        }
+    }
+
+    // ------------------------------------------------------------------ seit DB5: Gezeiten wachsen mit
+
+    /** Der Zeitraum der Analyse, aus der die Konstanten einer Station und Herkunft stammen: {von, bis} oder null. */
+    public long[] gezeitZeitraum(int station, String herkunft) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("SELECT " + epoch("MIN(VON)") + ", " + epoch("MAX(BIS)") + " FROM " + p + "GEZEIT WHERE STATION_ID = ? AND HERKUNFT = ?")) {
+            st.setInt(1, station);
+            st.setString(2, herkunft);
+            try (ResultSet r = st.executeQuery()) {
+                if (!r.next()) return null;
+                long a = r.getLong(1);
+                if (r.wasNull()) return null;
+                long b = r.getLong(2);
+                return r.wasNull() ? null : new long[] {a, b};
+            }
+        }
+    }
+
+    /** Eine Zeile in HH_ANALYSE mit ihren Tiden; gibt ANALYSE_ID. {@code pz} {von, bis} der Prüfzeit, neu/alt aus Gezeitenanalyse.vergleich. */
+    public long analyse(int station, String zweck, long stand, long von, long bis, com.dan.steuerhaus.gezeiten.Gezeitenanalyse.Analyse an, long[] pz, double[] neu,
+            double[] alt, String altHerkunft, double faktor, boolean angenommen, String grund, List<Vorhersage.Konstante> tiden, List<String> abgeleitet) throws SQLException {
+        long id;
+        try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT " + p + "ANALYSE_SEQ.NEXTVAL FROM DUAL")) {
+            r.next();
+            id = r.getLong(1);
+        }
+        try (PreparedStatement st = c.prepareStatement("INSERT INTO " + p + "ANALYSE (ANALYSE_ID, STATION_ID, ZWECK, STAND, VON, BIS, TAGE, WERTE, GENUTZT, REST, Z0, TIDEN, "
+                + "ABGELEITET, PRUEF_VON, PRUEF_BIS, PRUEF_N, FEHLER_HOEHE, FEHLER_ZEIT, ALT_FEHLER_HOEHE, ALT_FEHLER_ZEIT, ALT_HERKUNFT, FAKTOR, ANGENOMMEN, GRUND) VALUES "
+                + "(?, ?, ?, " + TD + ", " + TD + ", " + TD + ", ?, ?, ?, ?, ?, ?, ?, " + TD + ", " + TD + ", ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            int i = 1;
+            st.setLong(i++, id);
+            st.setInt(i++, station);
+            st.setString(i++, zweck);
+            st.setString(i++, zeit(stand));
+            st.setString(i++, zeit(von));
+            st.setString(i++, zeit(bis));
+            setze(st, i++, Math.round(an.tage() * 100) / 100.0);
+            st.setInt(i++, an.gesamt());
+            st.setInt(i++, an.genutzt());
+            setze(st, i++, rund(an.ergebnis().restRms(), 1e4));
+            setze(st, i++, rund(an.ergebnis().mittel(), 1e4));
+            st.setInt(i++, an.analysiert());
+            String ab = String.join("; ", abgeleitet);
+            st.setString(i++, ab.length() > 200 ? ab.substring(0, 197) + " …" : ab);
+            st.setString(i++, pz == null ? null : zeit(pz[0]));
+            st.setString(i++, pz == null ? null : zeit(pz[1]));
+            if (neu == null) st.setNull(i++, Types.NUMERIC);
+            else st.setInt(i++, (int) neu[0]);
+            setze(st, i++, neu == null ? Double.NaN : rund(neu[4], 1e4));
+            setze(st, i++, neu == null ? Double.NaN : rund(neu[2], 100));
+            setze(st, i++, alt == null ? Double.NaN : rund(alt[4], 1e4));
+            setze(st, i++, alt == null ? Double.NaN : rund(alt[2], 100));
+            st.setString(i++, altHerkunft);
+            setze(st, i++, rund(faktor, 1e5));
+            st.setString(i++, angenommen ? "J" : "N");
+            st.setString(i, grund == null ? null : grund.length() > 400 ? grund.substring(0, 397) + " …" : grund);
+            st.executeUpdate();
+        }
+        try (PreparedStatement st = c.prepareStatement("INSERT INTO " + p + "ANALYSE_TIDE (ANALYSE_ID, TIDE, AMPLITUDE, PHASE, ABGELEITET) VALUES (?, ?, ?, ?, ?)")) {
+            java.util.Set<String> abg = new java.util.HashSet<>();
+            for (String x : abgeleitet) abg.add(x.split("\\s+")[0]);
+            for (Vorhersage.Konstante k : tiden) {
+                st.setLong(1, id);
+                st.setString(2, k.tide().name);
+                st.setDouble(3, Math.round(k.amplitude() * 1e5) / 1e5);
+                st.setDouble(4, Math.round(k.phaseGrad() * 1e3) / 1e3);
+                st.setString(5, abg.contains(k.tide().name) ? "J" : "N");
+                st.addBatch();
+            }
+            st.executeBatch();
+        }
+        return id;
+    }
+
+    static double rund(double d, double f) { return Double.isNaN(d) || Double.isInfinite(d) ? Double.NaN : Math.round(d * f) / f; }
+
+    /** Die jüngste angenommene Analyse einer Station für einen Zweck (PEGEL, KALENDER); null ohne. */
+    public Long geltendeAnalyse(int station, String zweck) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("SELECT MAX(ANALYSE_ID) FROM " + p + "ANALYSE WHERE STATION_ID = ? AND ZWECK = ? AND ANGENOMMEN = 'J'")) {
+            st.setInt(1, station);
+            st.setString(2, zweck);
+            try (ResultSet r = st.executeQuery()) {
+                if (!r.next()) return null;
+                long v = r.getLong(1);
+                return r.wasNull() ? null : v;
+            }
+        }
+    }
+
+    /** Gezeit und Windstau aller Scheitel einer Station und Herkunft neu aus einer Vorhersage (mit der Analyse); gibt die Zahl. */
+    public int scheitelGezeit(int station, String herkunft, Vorhersage v, Long analyse) throws SQLException {
+        List<Object[]> l = new ArrayList<>();
+        try (PreparedStatement st = c.prepareStatement("SELECT ART, " + epoch("ZEIT") + ", HOEHE FROM " + p + "SCHEITEL WHERE STATION_ID = ? AND HERKUNFT = ?")) {
+            st.setInt(1, station);
+            st.setString(2, herkunft);
+            st.setFetchSize(2000);
+            try (ResultSet r = st.executeQuery()) {
+                while (r.next()) l.add(new Object[] {r.getString(1), r.getLong(2), r.getDouble(3)});
+            }
+        }
+        if (l.isEmpty()) return 0;
+        try (PreparedStatement st = c.prepareStatement("UPDATE " + p + "SCHEITEL SET GEZEIT = ?, STAU = ?, ANALYSE_ID = ? WHERE STATION_ID = ? AND ART = ? AND ZEIT = " + TD)) {
+            int n = 0;
+            for (Object[] o : l) {
+                double g = v.wert(Instant.ofEpochSecond((Long) o[1]));
+                st.setDouble(1, Math.round(g * 1000.0) / 1000.0);
+                st.setDouble(2, Math.round(((Double) o[2] - g) * 1000.0) / 1000.0);
+                if (analyse == null) st.setNull(3, Types.NUMERIC);
+                else st.setLong(3, analyse);
+                st.setInt(4, station);
+                st.setString(5, (String) o[0]);
+                st.setString(6, zeit((Long) o[1]));
+                st.addBatch();
+                if (++n % paket == 0) st.executeBatch();
+            }
+            st.executeBatch();
+        }
+        return l.size();
+    }
+
+    /** Scheitel einer Station und Herkunft ab einer Zeit weg (für die Schätzung am Ort mit neuer Tafel); gibt die Zahl. */
+    public int scheitelWeg(int station, String herkunft, long ab) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("DELETE FROM " + p + "SCHEITEL WHERE STATION_ID = ? AND HERKUNFT = ? AND ZEIT >= " + TD)) {
+            st.setInt(1, station);
+            st.setString(2, herkunft);
+            st.setString(3, zeit(ab));
+            return st.executeUpdate();
+        }
+    }
+
+    /** Das Mittelwasser eines Monats (MERGE). */
+    public void mittelwasser(int station, long monat, double mittel, double alle, int gesamt, int genutzt, Long analyse) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("MERGE INTO " + p + "MITTELWASSER m USING (SELECT ? STATION_ID, " + TD + " MONAT FROM DUAL) n "
+                + "ON (m.STATION_ID = n.STATION_ID AND m.MONAT = n.MONAT) WHEN MATCHED THEN UPDATE SET m.MITTEL = ?, m.MITTEL_ALLE = ?, m.GESAMT = ?, m.GENUTZT = ?, "
+                + "m.ANALYSE_ID = ?, m.BERECHNET = SYSDATE WHEN NOT MATCHED THEN INSERT (STATION_ID, MONAT, MITTEL, MITTEL_ALLE, GESAMT, GENUTZT, ANALYSE_ID, BERECHNET) "
+                + "VALUES (n.STATION_ID, n.MONAT, ?, ?, ?, ?, ?, SYSDATE)")) {
+            st.setInt(1, station);
+            st.setString(2, zeit(monat));
+            for (int k = 0; k < 2; k++) {
+                int i = 3 + 5 * k;
+                setze(st, i, rund(mittel, 1000));
+                setze(st, i + 1, rund(alle, 1000));
+                st.setInt(i + 2, gesamt);
+                st.setInt(i + 3, genutzt);
+                if (analyse == null) st.setNull(i + 4, Types.NUMERIC);
+                else st.setLong(i + 4, analyse);
+            }
+            st.executeUpdate();
+        }
+    }
+
+    /** Beginn des jüngsten Abrufs einer Art, auch mit Fehler; null ohne. */
+    public Instant letzterVersuch(String art) throws SQLException {
+        try (PreparedStatement st = c.prepareStatement("SELECT " + epoch("MAX(BEGINN)") + " FROM " + p + "ABRUF WHERE ART = ?")) {
+            st.setString(1, art);
+            try (ResultSet r = st.executeQuery()) {
+                if (!r.next()) return null;
+                long v = r.getLong(1);
+                return r.wasNull() ? null : Instant.ofEpochSecond(v);
+            }
         }
     }
 

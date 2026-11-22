@@ -396,6 +396,8 @@ public final class Guetebau {
 
     /** Eine Tide (Mondtag) in s: 24 h 50 min. */
     public static final long TIDE_S = 89_400;
+    /** Seit DB5 (DB4b): Windstau (m, über 25 h), über dem eine Zeit nicht ins Mittelwasser ohne Windstau zählt – wie gezeiten.stau [G]. */
+    public static double MW_STAU = 0.25;
 
     /** Rechnet die Kennzahlen aller aktiven Läufe und Pegel und schreibt sie in HH_GUETE; gibt die Zahl der Zeilen. */
     public static int rechnen(Messarchiv ar, double stauMin, ZoneId zone) throws SQLException { return rechnen(ar, stauMin, zone, 30); }
@@ -412,7 +414,7 @@ public final class Guetebau {
         int n = 0;
         try (PreparedStatement u = ar.c.prepareStatement("UPDATE " + p + "GUETE SET WERTE = ?, RMSE = ?, BIAS = ?, SKILL = ?, KORRELATION = ?, HW = ?, HW_ZEIT = ?, HW_HOEHE = ?, "
                 + "HW_RMS = ?, STAU_PAARE = ?, STAU_ANTEIL = ?, MODELL_MAX = ?, MODELL_MAX_ZEIT = " + Messarchiv.TD + ", MODELL_AM_TAG = ?, MODELL_AM_TAG_ZEIT = " + Messarchiv.TD
-                + ", MITTELWASSER = ?, TIDEMITTEL = ?, BIAS_OHNE_MW = ?, BERECHNET = SYSDATE WHERE LAUF_ID = ? AND STATION_ID = ?")) {
+                + ", MITTELWASSER = ?, TIDEMITTEL = ?, BIAS_OHNE_MW = ?, MW_RUHIG = ?, BIAS_OHNE_MW_RUHIG = ?, BERECHNET = SYSDATE WHERE LAUF_ID = ? AND STATION_ID = ?")) {
             for (Object[] z : zeilen) {
                 int lauf = (Integer) z[0], station = (Integer) z[1];
                 long von = (Long) z[2], bis = (Long) z[3], mitte = (von + bis) / 2, halb = Math.round(mwTage * 43_200);
@@ -440,8 +442,14 @@ public final class Guetebau {
                 Messarchiv.setze(u, 16, r3(k.mittelwasser()));
                 Messarchiv.setze(u, 17, r3(k.tidemittel()));
                 Messarchiv.setze(u, 18, r3(k.biasOhneMw()));
-                u.setInt(19, lauf);
-                u.setInt(20, station);
+                // seit DB5 (DB4b): das Mittelwasser ohne die Zeiten mit Windstau (geltende Gezeit, Windstau über 25 h höchstens
+                // MW_STAU), mindestens ein Viertel der Werte; der Bias ohne Mittelwasser damit
+                double[] mr = Gezeitenbau.mittelOhneStau(ar, station, mitte - halb, mitte + halb, MW_STAU);
+                double mwr = mr[2] >= Math.max(1, mr[3] / 4) ? mr[0] : Double.NaN;
+                Messarchiv.setze(u, 19, r3(mwr));
+                Messarchiv.setze(u, 20, r3(k.bias() + (mwr - am)));
+                u.setInt(21, lauf);
+                u.setInt(22, station);
                 n += u.executeUpdate();
             }
         }

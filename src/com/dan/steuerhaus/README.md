@@ -25,12 +25,13 @@ com.dan.steuerhaus.buehne   + com.dan.lauf, core,   Szenenapp, Katalog, Bedienun
                               com.dan.kino
 com.dan.steuerhaus.vergleich wie atlas            Vergleich, Mappe, Vergleichsansicht, Spieler (seit Y1)
 com.dan.steuerhaus.jahr     wie atlas               Jahresauftrag, Jahresmappe, Zeitplan, Jahresbild, Jahresansicht, Jahresfenster (Y3)
-com.dan.steuerhaus.gezeiten wie atlas, + core.astro Gezeitenauftrag, Gezeitentafel, Vorhersage, Mond, Kalenderansicht, Kalenderfenster (Z1)
+com.dan.steuerhaus.gezeiten wie atlas, + core.astro Gezeitenauftrag, Gezeitentafel, Vorhersage, Mond, Kalenderansicht, Kalenderfenster (Z1),
+                              + core.pruef (DB5) Gezeitenanalyse (DB5)
 com.dan.steuerhaus.chronik  wie atlas               Abdeckung, Chronikansicht, Chronikfenster (seit DB2)
 com.dan.steuerhaus.guete    wie atlas               Gueteansicht, Guetefenster (seit DB3)
 com.dan.steuerhaus.messung  java.*, java.sql,        Sammler (Hauptklasse, ohne Fenster), Messauftrag, Messarchiv, Uebernahme,
                               com.dan.store,        Scheitelsuche, Ausreisser, Aufbewahrung, Abruf (seit DB1), Chronikbau (DB2),
-                                                    Guetebau (DB3)
+                                                    Guetebau (DB3), Gezeitenbau (DB5)
                               core.pruef/astro/raum,
                               Kern, gezeiten
 com.dan.steuerhaus.ausgabe  wie buehne, + Kern von   Ausgabe (Hauptklasse), Aufnahme, Korn, Kodierer (seit W4), Vergleichsfolge (Y1),
@@ -333,3 +334,21 @@ Seit DB4 (Werkbuch HalligHooge 173, F272–F275 A) klärt das Messarchiv, woher 
 
 Schema Stufe 4 (Sichten `HH_WIND_VERGLEICH_V`, `HH_TAGESMITTEL_V`, `HH_GUETE_WIND_V`). Prüfung: `demo.MessungCheck` (12–16)
 und `demo.GueteCheck` (8 Wind, 9 Mittelwasser; Bilder `DB4_Guete_*.png`).
+
+## Gezeiten wachsen mit (DB5)
+
+Seit DB5 (Werkbuch HalligHooge 176, F276–F282 A) wächst die Gezeit mit der Messung im Messarchiv. Einmal im Monat rechnet der
+Sammler je Pegel einen Kandidaten aus allen Tagen und prüft ihn an den jüngsten 30 Tagen gegen die geltenden Konstanten;
+ersetzt wird nur, was besser trifft. Der Tidenkalender (`Hooge.gezeiten`) wächst ebenso.
+
+| Teil | Inhalt |
+|---|---|
+| `core.astro.Partialtide` (Renderer) | dazu L2, M3 und die Flachwassertiden 2SM2, MK3, MO3, S4, 2MS6, 2MN6, MSN6, M8, 3MS8 (Argument die Summe der Eltern, f das Produkt, u die Summe) |
+| `gezeiten.Gezeitenanalyse` | die Analyse der Messung aus `ausgabe.Gezeitenrechnung` (robust ohne Windstau, abgeleitete Tiden, Faktor auf die Kennwerte, Vergleich der Hoch- und Niedrigwasser, Windstau aus der Messung); neu: Auswahl der Tiden nach Rayleigh auch gegen größere, die selbst ausfielen; Sa und Ssa erst ab einem Jahr; Prüfzeit, Annahme, Mittelwasser ohne Windstau, Zeitplan der Tiden |
+| `messung.Gezeitenbau` | je Pegel Kandidat aus den 10-Minuten-Mitteln, Prüfung an den Minutenwerten, `HH_ANALYSE`, `HH_ANALYSE_TIDE`, `HH_GEZEIT` (Herkunft `MESSUNG`), Scheitel neu; der Kalender mit und ohne Faktor gegen die geltende Tafel, die Übertragung aus der Tafel (Grundrechnung mit dem Modell); Mittelwasser je Monat (`HH_MITTELWASSER`) |
+| `messung.Sammler` | `--gezeiten`; im stündlichen Abruf am 1. des Monats ab `gezeiten.wachsen.uhr`; die Scheitel nehmen die geltende Gezeit; nach einer neuen Tafel die Schätzung am Ort neu |
+| `messung.Guetebau` | DB4b: `MW_RUHIG`, `BIAS_OHNE_MW_RUHIG` (Mittelwasser ohne die Zeiten mit Windstau) |
+| `gezeiten.Kalenderansicht` | Zeile „Gezeit aus … Tagen Messung …“ unter dem Hinweis; Knopf „Herkunft“ (Taste H): Verlauf der Stände, Zeitplan der Tiden |
+
+Schema Stufe 5 (Sichten `HH_ANALYSE_V`, `HH_TIDE_VERLAUF_V`, `HH_MITTELWASSER_V`). Prüfung: `demo.MessungCheck` (17–20) und
+`demo.GezeitenCheck` (8 ohne Faktor, 11 Herkunft; Bild `DB5_Kalender_Herkunft.png`).

@@ -29,6 +29,8 @@ import java.util.Map;
  * bezug.z0    = 0.074                                # seit Z2: Z₀ am Bezug
  * bezug.tide  = M2; 1.5; 347.0                       # seit Z2: seine Konstanten (für den Windstau aus der Messung)
  * bezug2.pegel, bezug2.z0, bezug2.tide                # seit Z2b: ein zweiter gemessener Pegel (der Windstau ist das Mittel)
+ * herkunft    = aus 30 Tagen Messung am Pegel …       # seit DB5: die Zeile im Kalender; dazu herkunft.beginn, .bis, .faktor, .pruef
+ * verlauf.N   = Stand; von; bis; Tage; Tiden; Faktor; geprüft an; Höhe; Zeit; vorher Höhe; vorher Zeit; woher
  * </pre>
  */
 public final class Gezeitentafel {
@@ -168,7 +170,8 @@ public final class Gezeitentafel {
     public static void schreibe(File datei, String ort, double ost, double nord, double mittel, List<Vorhersage.Konstante> tiden, Map<String, String> modelle, List<Marke> marken,
                                 Map<String, String> kopf, Map<String, List<Vorhersage.Konstante>> bezugTiden) throws IOException {
         StringBuilder s = new StringBuilder();
-        s.append("# Gezeiten für den Tidenkalender (Z1, Werkbuch HalligHooge 155) – gerechnet von der Ausgabe (--gezeiten); nicht von Hand ändern.\n");
+        s.append("# Gezeiten für den Tidenkalender (Z1, Werkbuch HalligHooge 155; seit DB5, Werkbuch 176, wächst sie mit der Messung) – gerechnet von der Ausgabe\n");
+        s.append("# (--gezeiten, mit dem Modell) oder vom Sammler (--gezeiten, aus dem Messarchiv, nur wenn die Prüfung besser ist); nicht von Hand ändern.\n");
         s.append("# Astronomische Gezeit ohne Wind und Luftdruck. Nicht zur Navigation.\n");
         s.append(String.format(Locale.ROOT, "ort    = %s; %.1f; %.1f%n", ort, ost, nord));
         s.append(String.format(Locale.ROOT, "mittel = %.4f%n", mittel));

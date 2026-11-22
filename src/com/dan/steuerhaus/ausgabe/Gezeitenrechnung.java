@@ -11,6 +11,7 @@ import com.dan.lauf.Pegelreihe;
 import com.dan.lauf.Szenario;
 import com.dan.lauf.Szenen;
 import com.dan.steuerhaus.Manifest;
+import com.dan.steuerhaus.gezeiten.Gezeitenanalyse;
 import com.dan.steuerhaus.gezeiten.Gezeitenauftrag;
 import com.dan.steuerhaus.gezeiten.Gezeitentafel;
 import com.dan.steuerhaus.gezeiten.Vorhersage;
@@ -27,7 +28,9 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Rechnet die Konstanten des Tidenkalenders (seit Z1, Werkbuch HalligHooge 155; Aufruf {@code Ausgabe --gezeiten}).
+ * Rechnet die Konstanten des Tidenkalenders (seit Z1, Werkbuch HalligHooge 155; Aufruf {@code Ausgabe --gezeiten}): die
+ * Grundrechnung mit dem Modell (Übertragung auf den Ort). Seit DB5 (Werkbuch HalligHooge 176) liegt die Analyse der Messung in
+ * {@link Gezeitenanalyse}; die Tafel wächst danach über den Sammler ({@code --gezeiten}), der die Übertragung von hier übernimmt.
  * <ol>
  * <li><b>Messung:</b> harmonische Analyse der Reihe von PEGELONLINE am Bezugspegel ({@code gezeiten.bezug}, aus
  *     {@code gebiet/pegel}), <b>ohne Zeiten mit Windstau</b>: der Rest gegen eine erste Analyse, gemittelt über 25 h, darf
@@ -48,13 +51,12 @@ import java.util.function.Consumer;
  */
 public final class Gezeitenrechnung {
     /** Kandidaten der Analyse (30 Tage, Rayleigh 1). */
-    static final String[] KANDIDATEN = {"M2", "S2", "N2", "K1", "O1", "Q1", "M4", "MS4", "MN4", "M6"};
+    static final String[] KANDIDATEN = Gezeitenanalyse.KANDIDATEN_Z1;
     /** Abgeleitete Tiden: Name, Bezug der Amplitude, zweite Tide für die Phase. */
-    static final String[][] ABGELEITET = {{"K2", "S2", "M2"}, {"P1", "K1", "O1"}, {"NU2", "N2", "M2"}, {"2N2", "N2", "M2"}, {"Q1", "O1", "K1"}};
     /** Kleinster Unterschied zwischen benachbartem Hoch- und Niedrigwasser in gemessenen Reihen (m) [G]. */
-    static final double ABSTAND_MESSUNG = 0.2;
+    static final double ABSTAND_MESSUNG = Gezeitenanalyse.ABSTAND_MESSUNG;
     /** Halbe Breite des gleitenden Mittels gegen das Rauschen der Messung (min) [G]. */
-    static final int GLAETTEN = 7;
+    static final int GLAETTEN = Gezeitenanalyse.GLAETTEN;
 
     private Gezeitenrechnung() { }
 
@@ -227,83 +229,26 @@ public final class Gezeitenrechnung {
 
     // ------------------------------------------------------------------ Analyse der Messung
 
-    static List<Partialtide> tiden(String... namen) {
-        List<Partialtide> l = new ArrayList<>();
-        for (String n : namen) l.add(Partialtide.nach(n));
-        return l;
-    }
+    static List<Partialtide> tiden(String... namen) { return Gezeitenanalyse.tiden(namen); }
 
-    /** Analyse ohne Zeiten mit Windstau (dreimal: alle Werte, dann zweimal ohne die Zeiten über der Schwelle). */
+    /** Analyse ohne Zeiten mit Windstau – seit DB5 in {@link Gezeitenanalyse#robust}, hier mit den Kandidaten von Z1. */
     public static Analyse robust(Pegel p, double stau) {
         int n = p.werte.length;
         double[] t = new double[n], y = new double[n];
         long s0 = p.start.getEpochSecond();
-        int gesamt = 0;
         for (int i = 0; i < n; i++) {
             t[i] = s0 + (double) i * p.schritt;
             y[i] = p.werte[i];
-            if (!Double.isNaN(y[i])) gesamt++;
         }
-        double[] yy = y.clone(), s = new double[n];
-        Harmonik.Ergebnis e = null;
-        for (int runde = 0; runde < 3; runde++) {
-            e = Harmonik.analyse(t, yy, tiden(KANDIDATEN), 1.0);
-            s = stau(e, t, y, p.schritt);
-            yy = y.clone();
-            for (int i = 0; i < n; i++) if (!(Math.abs(s[i]) <= stau)) yy[i] = Double.NaN;
-        }
-        e = Harmonik.analyse(t, yy, tiden(KANDIDATEN), 1.0);
-        int genutzt = 0;
-        for (double v : yy) if (!Double.isNaN(v)) genutzt++;
-        List<String> abg = new ArrayList<>();
-        Harmonik.Ergebnis voll = ableiten(e, abg);
-        return new Analyse(p, voll, genutzt, gesamt, abg, t, y, stau(voll, t, y, p.schritt));
+        Gezeitenanalyse.Analyse a = Gezeitenanalyse.robust(t, y, p.schritt, stau, KANDIDATEN);
+        return new Analyse(p, a.ergebnis(), a.genutzt(), a.gesamt(), a.abgeleitet(), a.t(), a.y(), a.stau());
     }
 
     /** Windstau: Messung minus Vorhersage, gemittelt über 25 h (zentriert); NaN, wo die Messung fehlt. */
-    static double[] stau(Harmonik.Ergebnis e, double[] t, double[] y, int schritt) {
-        int n = y.length, h = (int) Math.round(12.5 * 3600 / schritt);
-        double[] r = new double[n], s = new double[n];
-        for (int i = 0; i < n; i++) r[i] = Double.isNaN(y[i]) ? Double.NaN : y[i] - e.wert(Instant.ofEpochSecond(Math.round(t[i])));
-        double sum = 0;
-        int cnt = 0;
-        // gleitendes Mittel über [i − h, i + h]
-        for (int i = 0; i <= Math.min(n - 1, h); i++) if (!Double.isNaN(r[i])) {
-            sum += r[i];
-            cnt++;
-        }
-        for (int i = 0; i < n; i++) {
-            s[i] = Double.isNaN(y[i]) || cnt < h / 2 ? Double.NaN : sum / cnt;
-            int rein = i + h + 1, raus = i - h;
-            if (rein < n && !Double.isNaN(r[rein])) {
-                sum += r[rein];
-                cnt++;
-            }
-            if (raus >= 0 && !Double.isNaN(r[raus])) {
-                sum -= r[raus];
-                cnt--;
-            }
-        }
-        return s;
-    }
+    static double[] stau(Harmonik.Ergebnis e, double[] t, double[] y, int schritt) { return Gezeitenanalyse.stau(e, t, y, schritt); }
 
-    /** Ergänzt die Tiden, die aus der Reihe nicht zu trennen waren, aus ihren Nachbarn (Gleichgewicht, Phase linear in ω). */
-    static Harmonik.Ergebnis ableiten(Harmonik.Ergebnis e, List<String> abg) {
-        List<Harmonik.Tide> l = new ArrayList<>(e.tiden());
-        for (String[] r : ABGELEITET) {
-            if (e.tide(r[0]) != null) continue;
-            Harmonik.Tide a = e.tide(r[1]), b = e.tide(r[2]);
-            if (a == null || b == null) continue;
-            Partialtide x = Partialtide.nach(r[0]);
-            double wx = x.gradJeStunde(), wa = a.tide().gradJeStunde(), wb = b.tide().gradJeStunde();
-            double amp = a.amplitude() * x.gleichgewicht / a.tide().gleichgewicht;
-            double dg = FAngle.norm180(b.phaseGrad() - a.phaseGrad());
-            double g = FAngle.norm360(a.phaseGrad() + dg * (wx - wa) / (wb - wa));
-            l.add(new Harmonik.Tide(x, amp, g));
-            abg.add(String.format(Locale.ROOT, "%s %.4f m %.1f° aus %s", r[0], amp, g, r[1]));
-        }
-        return new Harmonik.Ergebnis(e.mittel(), l, List.of(), e.restRms(), e.werte(), e.dauerStunden());
-    }
+    /** Ergänzt die Tiden, die aus der Reihe nicht zu trennen waren, aus ihren Nachbarn. */
+    static Harmonik.Ergebnis ableiten(Harmonik.Ergebnis e, List<String> abg) { return Gezeitenanalyse.ableiten(e, abg); }
 
     static String werte(double[] v) {
         StringBuilder s = new StringBuilder();
@@ -312,17 +257,9 @@ public final class Gezeitenrechnung {
     }
 
     /** Alle Amplituden mal f. */
-    static List<Vorhersage.Konstante> mal(List<Vorhersage.Konstante> l, double f) {
-        List<Vorhersage.Konstante> r = new ArrayList<>();
-        for (Vorhersage.Konstante k : l) r.add(new Vorhersage.Konstante(k.tide(), k.amplitude() * f, k.phaseGrad()));
-        return r;
-    }
+    static List<Vorhersage.Konstante> mal(List<Vorhersage.Konstante> l, double f) { return Gezeitenanalyse.mal(l, f); }
 
-    static List<Vorhersage.Konstante> konstanten(Harmonik.Ergebnis e) {
-        List<Vorhersage.Konstante> l = new ArrayList<>();
-        for (Harmonik.Tide t : e.tiden()) l.add(new Vorhersage.Konstante(t.tide(), t.amplitude(), t.phaseGrad()));
-        return l;
-    }
+    static List<Vorhersage.Konstante> konstanten(Harmonik.Ergebnis e) { return Gezeitenanalyse.konstanten(e); }
 
     static double amp(Harmonik.Ergebnis e, String n) {
         Harmonik.Tide t = e.tide(n);
@@ -335,21 +272,7 @@ public final class Gezeitenrechnung {
     }
 
     /** Mittel von Hoch- und Niedrigwasser über das Jahr: {MThw, MTnw}. */
-    static double[] kennwerte(Vorhersage v, int jahr) {
-        Instant a = LocalDate.of(jahr, 1, 1).atStartOfDay(ZoneOffset.UTC).toInstant(), b = LocalDate.of(jahr + 1, 1, 1).atStartOfDay(ZoneOffset.UTC).toInstant();
-        double sh = 0, sn = 0;
-        int nh = 0, nn = 0;
-        for (Vorhersage.Extrem e : v.extreme(a, b)) {
-            if (e.art() == Vorhersage.Art.HOCHWASSER) {
-                sh += e.hoehe();
-                nh++;
-            } else {
-                sn += e.hoehe();
-                nn++;
-            }
-        }
-        return new double[] {sh / Math.max(1, nh), sn / Math.max(1, nn)};
-    }
+    static double[] kennwerte(Vorhersage v, int jahr) { return Gezeitenanalyse.kennwerte(v, jahr); }
 
     // ------------------------------------------------------------------ Modell
 
@@ -383,16 +306,8 @@ public final class Gezeitenrechnung {
         return u;
     }
 
-    /** Die Konstanten des Bezugs, übertragen: Amplitude mal Verhältnis der Art, Phase um ω · Verspätung (eintägige wie halbtägige). */
-    static List<Vorhersage.Konstante> uebertrage(List<Vorhersage.Konstante> bezug, double[][] u) {
-        List<Vorhersage.Konstante> l = new ArrayList<>();
-        for (Vorhersage.Konstante k : bezug) {
-            int art = k.tide().art();
-            double[] f = art >= 6 ? u[2] : art >= 4 ? u[1] : u[0];
-            l.add(new Vorhersage.Konstante(k.tide(), k.amplitude() * f[0], FAngle.norm360(k.phaseGrad() + k.tide().gradJeStunde() * f[1] / 3600)));
-        }
-        return l;
-    }
+    /** Die Konstanten des Bezugs, übertragen (seit DB5 in {@link Gezeitenanalyse#uebertrage}). */
+    static List<Vorhersage.Konstante> uebertrage(List<Vorhersage.Konstante> bezug, double[][] u) { return Gezeitenanalyse.uebertrage(bezug, u); }
 
     // ------------------------------------------------------------------ Vergleiche
 
@@ -401,22 +316,13 @@ public final class Gezeitenrechnung {
      * mittlere Höhe (m), mittlere |Höhe|} (Vorhersage minus Messung).
      */
     /** Vorlauf (h), für den der Fehler des Scheitels mit gemessenem Windstau gerechnet wird [G]. */
-    public static final double[] STAU_VORLAUF = {1, 2, 3, 4, 6};
+    public static final double[] STAU_VORLAUF = Gezeitenanalyse.STAU_VORLAUF;
 
     /** Seit Z2: wie {@link #stauFehlerMittel} mit einem Pegel. */
-    public static double[][] stauFehler(Pegel p, Vorhersage v, double[] vorlauf) { return stauFehlerMittel(List.of(p), List.of(v), vorlauf); }
+    public static double[][] stauFehler(Pegel p, Vorhersage v, double[] vorlauf) { return Gezeitenanalyse.stauFehler(p, v, vorlauf); }
 
     /** Die gemessenen Hoch- und Niedrigwasser eines Pegels. */
-    public static List<Vorhersage.Extrem> extreme(Pegel p) {
-        int n = p.werte.length;
-        double[] t = new double[n], y = new double[n];
-        long s0 = p.start.getEpochSecond();
-        for (int i = 0; i < n; i++) {
-            t[i] = s0 + (double) i * p.schritt;
-            y[i] = p.werte[i];
-        }
-        return extremeReihe(t, y, p.schritt);
-    }
+    public static List<Vorhersage.Extrem> extreme(Pegel p) { return Gezeitenanalyse.extreme(p); }
 
     /**
      * Seit Z2b: der Scheitel jedes gemessenen Hochwassers an jedem der Pegel, geschätzt wie die Landunter-Uhr – Gezeit
@@ -424,79 +330,22 @@ public final class Gezeitenrechnung {
      * gemessenen Scheitel. Fehlt an einem Pegel die Messung, zählt das Hochwasser nicht. Gibt {RMS je Vorlauf}, {mittlerer
      * Fehler je Vorlauf}, {RMS ohne Wind, Zahl der Hochwasser}.
      */
-    public static double[][] stauFehlerMittel(List<Pegel> pegel, List<Vorhersage> v, double[] vorlauf) {
-        double[] rms = new double[vorlauf.length], mit = new double[vorlauf.length];
-        double so = 0;
-        int no = 0;
-        List<List<Vorhersage.Extrem>> gem = new ArrayList<>();
-        for (Pegel p : pegel) gem.add(extreme(p));
-        for (int k = 0; k < vorlauf.length; k++) {
-            double q = 0, m = 0;
-            int c = 0;
-            for (int i = 0; i < pegel.size(); i++)
-                for (Vorhersage.Extrem e : gem.get(i)) {
-                    if (e.art() != Vorhersage.Art.HOCHWASSER) continue;
-                    Vorhersage.Extrem hv = naechstesHw(v.get(i), e.zeit());
-                    Instant t0 = e.zeit().minusSeconds(Math.round(vorlauf[k] * 3600));
-                    double st = 0;
-                    for (int j = 0; j < pegel.size(); j++) st += stundenStau(pegel.get(j), v.get(j), t0) / pegel.size();
-                    if (hv == null || Double.isNaN(st)) continue;
-                    double f = hv.hoehe() + st - e.hoehe();
-                    q += f * f;
-                    m += f;
-                    c++;
-                    if (k == 0) {
-                        so += (hv.hoehe() - e.hoehe()) * (hv.hoehe() - e.hoehe());
-                        no++;
-                    }
-                }
-            rms[k] = c == 0 ? Double.NaN : Math.sqrt(q / c);
-            mit[k] = c == 0 ? Double.NaN : m / c;
-        }
-        return new double[][] {rms, mit, {no == 0 ? Double.NaN : Math.sqrt(so / no), no}};
-    }
+    public static double[][] stauFehlerMittel(List<Pegel> pegel, List<Vorhersage> v, double[] vorlauf) { return Gezeitenanalyse.stauFehlerMittel(pegel, v, vorlauf); }
 
     /** Konstanten eines Pegels, auf seine Kennwerte gebracht: Amplituden mal Faktor (Tidenhub), Z₀ aus MThw und MTnw. */
     public record Kalibrierung(List<Vorhersage.Konstante> konstanten, double z0, double faktor, double hub30, double hubKennwerte) { }
 
     /** Seit Z2b: wie der Bezug (Faktor in drei Schritten auf den Tidenhub der Kennwerte 2027, Z₀ auf MThw/MTnw); ohne Kennwerte unverändert. */
     public static Kalibrierung kalibriert(Analyse a, Pegel p) {
-        double z0 = a.ergebnis.mittel(), faktor = 1;
-        List<Vorhersage.Konstante> k30 = konstanten(a.ergebnis);
-        double[] kb0 = kennwerte(new Vorhersage(0, k30), 2027), kb = kb0;
-        double mthw = p.kennwert("MThw"), mtnw = p.kennwert("MTnw");
-        if (!Double.isNaN(mthw) && !Double.isNaN(mtnw)) {
-            for (int i = 0; i < 3; i++) {
-                faktor *= (mthw - mtnw) / (kb[0] - kb[1]);
-                kb = kennwerte(new Vorhersage(0, mal(k30, faktor)), 2027);
-            }
-            z0 = (mthw + mtnw - kb[0] - kb[1]) / 2;
-        }
-        return new Kalibrierung(mal(k30, faktor), z0, faktor, kb0[0] - kb0[1], mthw - mtnw);
+        Gezeitenanalyse.Kalibrierung k = Gezeitenanalyse.kalibriert(konstanten(a.ergebnis), a.ergebnis.mittel(), p.kennwert("MThw"), p.kennwert("MTnw"));
+        return new Kalibrierung(k.konstanten(), k.z0(), k.faktor(), k.hubAnalyse(), k.hubKennwerte());
     }
 
     /** Windstau wie die App: Mittel von Messung minus Gezeit in der Stunde vor t0 (NaN mit weniger als 30 Werten). */
-    public static double stundenStau(Pegel p, Vorhersage v, Instant t0) {
-        double s = 0;
-        int c = 0;
-        long a = t0.getEpochSecond() - 3600, e = t0.getEpochSecond(), s0 = p.start.getEpochSecond();
-        for (long i = Math.max(0, (a - s0) / p.schritt); i < p.werte.length; i++) {
-            long ts = s0 + i * p.schritt;
-            if (ts > e) break;
-            if (ts <= a || Float.isNaN(p.werte[(int) i])) continue;
-            s += p.werte[(int) i] - v.wert(Instant.ofEpochSecond(ts));
-            c++;
-        }
-        return c < 30 ? Double.NaN : s / c;
-    }
+    public static double stundenStau(Pegel p, Vorhersage v, Instant t0) { return Gezeitenanalyse.stundenStau(p, v, t0); }
 
     /** Das Hochwasser der Vorhersage nächst t (höchstens 3 h weg), sonst null. */
-    public static Vorhersage.Extrem naechstesHw(Vorhersage v, Instant t) {
-        Vorhersage.Extrem b = null;
-        for (Vorhersage.Extrem e : v.extreme(t.minusSeconds(4 * 3600), t.plusSeconds(4 * 3600)))
-            if (e.art() == Vorhersage.Art.HOCHWASSER && (b == null || Math.abs(e.zeit().getEpochSecond() - t.getEpochSecond()) < Math.abs(b.zeit().getEpochSecond() - t.getEpochSecond()))) b = e;
-        return b != null && Math.abs(b.zeit().getEpochSecond() - t.getEpochSecond()) <= 3 * 3600 ? b : null;
-    }
+    public static Vorhersage.Extrem naechstesHw(Vorhersage v, Instant t) { return Gezeitenanalyse.naechstesHw(v, t); }
 
     static double[] vergleich(Vorhersage v, Analyse a, double stau) {
         List<Vorhersage.Extrem> gemessen = extremeReihe(a.t, a.y, a.pegel.schritt);
@@ -535,52 +384,11 @@ public final class Gezeitenrechnung {
         return n == 0 ? new double[] {0, Double.NaN, Double.NaN, Double.NaN, Double.NaN} : new double[] {n, st / n, sta / n, sh / n, sha / n};
     }
 
-    static Vorhersage.Extrem naechstes(List<Vorhersage.Extrem> l, Vorhersage.Extrem g, long grenze) {
-        Vorhersage.Extrem b = null;
-        long best = Long.MAX_VALUE;
-        for (Vorhersage.Extrem e : l) {
-            if (e.art() != g.art()) continue;
-            long d = Math.abs(e.zeit().getEpochSecond() - g.zeit().getEpochSecond());
-            if (d < best) {
-                best = d;
-                b = e;
-            }
-        }
-        return best <= grenze ? b : null;
-    }
+    static Vorhersage.Extrem naechstes(List<Vorhersage.Extrem> l, Vorhersage.Extrem g, long grenze) { return Gezeitenanalyse.naechstes(l, g, grenze); }
 
     /**
      * Hoch- und Niedrigwasser einer gemessenen Reihe: geglättet (gleitendes Mittel ± {@link #GLAETTEN} min), dann wie
      * {@code Pegelreihe.marken} mit dem Abstand {@link #ABSTAND_MESSUNG}; Lücken unterbrechen nicht.
      */
-    public static List<Vorhersage.Extrem> extremeReihe(double[] t, double[] y, int schritt) {
-        int n = y.length, h = Math.max(1, GLAETTEN * 60 / schritt);
-        double[] g = new double[n];
-        for (int i = 0; i < n; i++) {
-            double s = 0;
-            int c = 0;
-            for (int j = Math.max(0, i - h); j <= Math.min(n - 1, i + h); j++) if (!Double.isNaN(y[j])) {
-                s += y[j];
-                c++;
-            }
-            g[i] = c > h ? s / c : Double.NaN;
-        }
-        List<Vorhersage.Extrem> m = new ArrayList<>();
-        int iMax = -1, iMin = -1, lage = 0;
-        for (int i = 0; i < n; i++) {
-            if (Double.isNaN(g[i])) continue;
-            if (iMax < 0 || g[i] > g[iMax]) iMax = i;
-            if (iMin < 0 || g[i] < g[iMin]) iMin = i;
-            if (lage >= 0 && g[i] < g[iMax] - ABSTAND_MESSUNG) {
-                if (lage > 0) m.add(new Vorhersage.Extrem(Vorhersage.Art.HOCHWASSER, Instant.ofEpochSecond(Math.round(t[iMax])), g[iMax]));
-                lage = -1;
-                iMin = i;
-            } else if (lage <= 0 && g[i] > g[iMin] + ABSTAND_MESSUNG) {
-                if (lage < 0) m.add(new Vorhersage.Extrem(Vorhersage.Art.NIEDRIGWASSER, Instant.ofEpochSecond(Math.round(t[iMin])), g[iMin]));
-                lage = 1;
-                iMax = i;
-            }
-        }
-        return m;
-    }
+    public static List<Vorhersage.Extrem> extremeReihe(double[] t, double[] y, int schritt) { return Gezeitenanalyse.extremeReihe(t, y, schritt); }
 }

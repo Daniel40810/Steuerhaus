@@ -56,6 +56,10 @@ import java.util.function.Supplier;
  * Ortszeit mit Hoch- und Niedrigwasser, jetzt, Mondphase, Spring- oder Nipptide, Marken des Modells, wo es einen Lauf
  * gibt), rechts vier Wochen als Liste, darunter der Ausblick über acht Wochen (Hoch- und Niedrigwasser jeder Tide, Mond,
  * Spring und Nipp). Tasten: ← → (Tag), ↑ ↓ (Woche), Pos1 (heute), Esc (schließt, siehe {@link Kalenderfenster}).
+ * <p>
+ * Seit DB5 (Werkbuch HalligHooge 176, F282 A): unter dem Hinweis eine Zeile, aus wie vielen Tagen Messung die Gezeit stammt
+ * und wie gut sie zuletzt war ({@code herkunft} in der Tafel), und der Knopf „Herkunft“: statt Tag und Liste der Verlauf der
+ * angenommenen Stände und der Zeitplan der Tiden, die die Messung mit der Zeit trennt (H).
  */
 public final class Kalenderansicht extends JPanel {
     static final int LISTE_WOCHEN = 4, AUSBLICK_WOCHEN = 8;
@@ -75,6 +79,10 @@ public final class Kalenderansicht extends JPanel {
     final Tagesbild tagesbild = new Tagesbild();
     final Liste liste = new Liste();
     final Ausblick ausblick = new Ausblick();
+    final Herkunftsbild herkunftsbild = new Herkunftsbild();
+    final FButton herkunft = new FButton("Herkunft");
+    final java.awt.CardLayout karten = new java.awt.CardLayout();
+    private boolean zeigtHerkunft;
     final FButton wocheZurueck = new FButton("« Woche"), tagZurueck = new FButton("« Tag"), heute = new FButton("Heute"), tagVor = new FButton("Tag »"),
             wocheVor = new FButton("Woche »"), csv = new FButton("Als Liste sichern"), sichern = new FButton("Bild sichern");
     final JLabel stand = new JLabel(" ");
@@ -94,8 +102,10 @@ public final class Kalenderansicht extends JPanel {
         this.hinweis = hinweis == null ? "" : hinweis;
         this.zone = zone;
         this.fotos = fotos;
-        for (FButton b : new FButton[] {wocheZurueck, tagZurueck, heute, tagVor, wocheVor, csv, sichern}) b.setFocusable(false);
-        for (FButton b : new FButton[] {wocheZurueck, tagZurueck, tagVor, wocheVor, csv, sichern}) b.setVariant(FButtonVariant.GHOST);
+        for (FButton b : new FButton[] {wocheZurueck, tagZurueck, heute, tagVor, wocheVor, csv, sichern, herkunft}) b.setFocusable(false);
+        for (FButton b : new FButton[] {wocheZurueck, tagZurueck, tagVor, wocheVor, csv, sichern, herkunft}) b.setVariant(FButtonVariant.GHOST);
+        herkunft.addActionListener(e -> zeigeHerkunft(!zeigtHerkunft));
+        herkunft.setToolTipText("Woher die Gezeit stammt: Tage der Messung, Prüfung, Verlauf und welche Tiden die Messung mit der Zeit trennt (H)");
         wocheZurueck.addActionListener(e -> zeige(tag.minusWeeks(1)));
         tagZurueck.addActionListener(e -> zeige(tag.minusDays(1)));
         heute.addActionListener(e -> zeige(heute()));
@@ -107,7 +117,7 @@ public final class Kalenderansicht extends JPanel {
 
         JPanel knoepfe = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
         knoepfe.setOpaque(false);
-        for (JComponent c : new JComponent[] {wocheZurueck, tagZurueck, heute, tagVor, wocheVor, csv, sichern}) knoepfe.add(c);
+        for (JComponent c : new JComponent[] {wocheZurueck, tagZurueck, heute, tagVor, wocheVor, csv, sichern, herkunft}) knoepfe.add(c);
         Faerber.rolle(stand, "leise");
         stand.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
         JPanel leiste = Faerber.rolle(new JPanel(new BorderLayout()), "grund");
@@ -117,14 +127,17 @@ public final class Kalenderansicht extends JPanel {
         rechts.add(stand);
         leiste.add(rechts, BorderLayout.CENTER);
 
-        JPanel oben = Faerber.rolle(new JPanel(new BorderLayout()), "grund");
-        oben.add(tagesbild, BorderLayout.CENTER);
-        oben.add(liste, BorderLayout.EAST);
+        JPanel kalender = Faerber.rolle(new JPanel(new BorderLayout()), "grund");
+        kalender.add(tagesbild, BorderLayout.CENTER);
+        kalender.add(liste, BorderLayout.EAST);
+        JPanel oben = Faerber.rolle(new JPanel(karten), "grund");
+        oben.add(kalender, "kalender");
+        oben.add(herkunftsbild, "herkunft");
         JPanel unten = Faerber.rolle(new JPanel(new BorderLayout()), "grund");
         unten.add(ausblick, BorderLayout.CENTER);
         JPanel fuss = Faerber.rolle(new JPanel(new BorderLayout()), "grund");
         fuss.add(leiste, BorderLayout.NORTH);
-        if (!this.hinweis.isEmpty()) fuss.add(new Fusszeile(), BorderLayout.CENTER);
+        if (!this.hinweis.isEmpty() || tafel.kopf.containsKey("herkunft")) fuss.add(new Fusszeile(), BorderLayout.CENTER);
         unten.add(fuss, BorderLayout.SOUTH);
         Faerber.rolle(this, "grund");
         add(oben, BorderLayout.CENTER);
@@ -134,6 +147,11 @@ public final class Kalenderansicht extends JPanel {
     }
 
     private void tasten() {
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke('h'), "herkunft");
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke('H'), "herkunft");
+        getActionMap().put("herkunft", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { zeigeHerkunft(!zeigtHerkunft); }
+        });
         Object[][] t = {{"LEFT", (Runnable) () -> zeige(tag.minusDays(1))}, {"RIGHT", (Runnable) () -> zeige(tag.plusDays(1))},
                 {"UP", (Runnable) () -> zeige(tag.minusWeeks(1))}, {"DOWN", (Runnable) () -> zeige(tag.plusWeeks(1))}, {"HOME", (Runnable) () -> zeige(heute())}};
         for (Object[] x : t) {
@@ -149,6 +167,17 @@ public final class Kalenderansicht extends JPanel {
     // ------------------------------------------------------------------ Steuern
 
     public LocalDate heute() { return jetzt.get().atZone(zone).toLocalDate(); }
+
+    /** Seit DB5: statt Tag und Liste die Herkunft der Gezeit (oder zurück). */
+    public void zeigeHerkunft(boolean an) {
+        zeigtHerkunft = an;
+        Container oben = herkunftsbild.getParent();
+        if (oben != null) karten.show(oben, an ? "herkunft" : "kalender");
+        herkunft.setText(an ? "Kalender" : "Herkunft");
+        herkunftsbild.repaint();
+    }
+
+    public boolean zeigtHerkunft() { return zeigtHerkunft; }
 
     public LocalDate tag() { return tag; }
 
@@ -307,9 +336,9 @@ public final class Kalenderansicht extends JPanel {
         }
     }
 
-    /** Der Hinweis unter den Knöpfen, umbrochen auf die Breite. */
+    /** Der Hinweis unter den Knöpfen, umbrochen auf die Breite; seit DB5 davor die Herkunft der Gezeit. */
     final class Fusszeile extends JComponent {
-        Fusszeile() { setPreferredSize(new Dimension(800, 36)); }
+        Fusszeile() { setPreferredSize(new Dimension(800, tafel.kopf.containsKey("herkunft") ? 52 : 36)); }
 
         @Override protected void paintComponent(Graphics g0) {
             Thema th = Thema.aktuell();
@@ -321,6 +350,15 @@ public final class Kalenderansicht extends JPanel {
             g.setColor(th.leise);
             FontMetrics fm = g.getFontMetrics();
             int y = fm.getAscent() + 2;
+            String hk = tafel.kopf.get("herkunft");
+            if (hk != null) {
+                g.setColor(th.text);
+                String z0 = "Gezeit " + hk;
+                while (z0.length() > 20 && fm.stringWidth(z0) > getWidth() - 28) z0 = z0.substring(0, z0.length() - 2);
+                g.drawString(z0, 14, y);
+                y += fm.getHeight() + 2;
+                g.setColor(th.leise);
+            }
             StringBuilder z = new StringBuilder();
             for (String w : hinweis.split("\\s+")) {
                 if (z.length() > 0 && fm.stringWidth(z + " " + w) > getWidth() - 28) {
@@ -658,6 +696,173 @@ public final class Kalenderansicht extends JPanel {
             int ly = KOPF + 7 * LISTE_WOCHEN * ZEILE + 18;
             if (ly < h) g.drawString("fett: Hochwasser · S Springtide · N Nipptide · Mond: Hauptphasen", xd, ly);
             g.dispose();
+        }
+    }
+
+    // ------------------------------------------------------------------ seit DB5: Herkunft
+
+    /** Ein Stand im Verlauf der Tafel (Kopfzeile verlauf.N). */
+    record Stand(String stand, String von, String bis, String tage, String tiden, String faktor, String n, String hoehe, String zeit, String hoeheAlt, String zeitAlt,
+                 String woher) {
+        static Stand aus(String z) {
+            String[] t = z.split(";", -1);
+            String[] u = new String[12];
+            for (int i = 0; i < 12; i++) u[i] = i < t.length ? t[i].strip() : "–";
+            return new Stand(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11]);
+        }
+    }
+
+    /** Die Stände der Tafel, der älteste zuerst. */
+    public List<Stand> verlauf() {
+        List<Stand> l = new ArrayList<>();
+        for (int i = 1; tafel.kopf.containsKey("verlauf." + i); i++) l.add(Stand.aus(tafel.kopf.get("verlauf." + i)));
+        return l;
+    }
+
+    static String datumKurz(String iso, ZoneId z) {
+        try {
+            return DateTimeFormatter.ofPattern("d.M.yyyy", Locale.GERMAN).format(Instant.parse(iso).atZone(z));
+        } catch (RuntimeException e) {
+            return iso;
+        }
+    }
+
+    static String zahlText(String s, int stellen) {
+        try {
+            return zahl(Double.parseDouble(s), stellen, false);
+        } catch (RuntimeException e) {
+            return s;
+        }
+    }
+
+    /** Herkunft der Gezeit: jetzt, Verlauf, Zeitplan der Tiden. */
+    final class Herkunftsbild extends JComponent {
+        Herkunftsbild() { setPreferredSize(new Dimension(1448, 620)); }
+
+        @Override protected void paintComponent(Graphics g0) {
+            Graphics2D g = (Graphics2D) g0.create();
+            male(g, getWidth(), getHeight());
+            g.dispose();
+        }
+
+        void male(Graphics2D g, int w, int h) {
+            Thema th = Thema.aktuell();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g.setColor(th.grund);
+            g.fillRect(0, 0, w, h);
+            int x = 58, y = 34;
+            g.setFont(th.titel(22f));
+            g.setColor(th.text);
+            g.drawString("Herkunft der Gezeit", x, y);
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+            g.setColor(th.leise);
+            String faktor = tafel.kopf.get("herkunft.faktor");
+            g.drawString(tafel.ort + " · gemessen am Pegel " + (tafel.bezugAnzeige.isEmpty() ? "–" : tafel.bezugAnzeige) + " · mit dem Modell übertragen"
+                    + (faktor == null ? "" : " · " + faktor + " Faktor auf die Kennwerte 2011–2020"), x, y + 22);
+            // ---- jetzt
+            y += 58;
+            g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+            g.setColor(th.text);
+            g.drawString("Jetzt", x, y);
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+            String hk = tafel.kopf.get("herkunft");
+            y = umbrochen(g, hk != null ? "Die Gezeit stammt " + hk + "." : "Die Gezeit stammt aus der Grundrechnung (Z1): " + tafel.kopf.getOrDefault("bezug", "–") + ".", x,
+                    y + 20, w - 2 * x, th.text);
+            List<Vorhersage.Konstante> bt = new ArrayList<>(tafel.bezugTiden.isEmpty() ? tafel.tiden : tafel.bezugTiden);
+            bt.sort((a, b) -> Double.compare(b.amplitude(), a.amplitude()));
+            StringBuilder sb = new StringBuilder();
+            for (Vorhersage.Konstante k : bt) sb.append(sb.length() > 0 ? " · " : "").append(k.tide().name).append(' ').append(zahl(k.amplitude() * 100, 1, false)).append(" cm");
+            String ab = tafel.kopf.getOrDefault("bezug.abgeleitet", "");
+            y = umbrochen(g, bt.size() + " Tiden am Pegel (Amplitude): " + sb + (ab.isBlank() ? "" : ". Abgeleitet aus den Nachbarn: " + ab.replaceAll(" [0-9.]+ m [0-9.]+° aus ", " aus ")
+                    + "."), x, y + 4, w - 2 * x, th.leise);
+            // ---- Verlauf
+            y += 22;
+            g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+            g.setColor(th.text);
+            g.drawString("Verlauf (angenommene Stände; geprüft an den Hoch- und Niedrigwassern ohne Windstau, mittlere Abweichung)", x, y);
+            String[] kopf = {"Stand", "Messung", "Tage", "Tiden", "Faktor", "geprüft an", "Höhe", "Zeit", "vorher Höhe", "vorher Zeit", "Woher"};
+            int[] sx = {0, 110, 300, 360, 420, 490, 590, 670, 750, 850, 940};
+            y += 22;
+            g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+            g.setColor(th.leise);
+            for (int i = 0; i < kopf.length; i++) g.drawString(kopf[i], x + sx[i], y);
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+            List<Stand> vl = verlauf();
+            if (vl.isEmpty()) {
+                g.setColor(th.leise);
+                g.drawString("noch kein Stand aus dem Messarchiv – der Sammler prüft am 1. jedes Monats (Sammler --gezeiten)", x, y + 20);
+                y += 20;
+            }
+            for (int r = 0; r < vl.size(); r++) {
+                Stand st = vl.get(r);
+                y += 20;
+                if (r == vl.size() - 1) {
+                    g.setColor(Thema.mitAlpha(th.primaer, 70));
+                    g.fill(new RoundRectangle2D.Double(x - 6, y - 14, sx[10] + 300, 19, 8, 8));
+                }
+                g.setColor(r == vl.size() - 1 ? th.text : th.leise);
+                String[] z = {datumKurz(st.stand(), zone), datumKurz(st.von(), zone) + "–" + datumKurz(st.bis(), zone), zahlText(st.tage(), 1), st.tiden(), st.faktor(),
+                        st.n().equals("–") ? "–" : st.n() + " Extreme", st.hoehe().equals("–") ? "–" : "± " + zahlText(st.hoehe(), 2) + " m",
+                        st.zeit().equals("–") ? "–" : "± " + zahlText(st.zeit(), 0) + " min", st.hoeheAlt().equals("–") ? "–" : "± " + zahlText(st.hoeheAlt(), 2) + " m",
+                        st.zeitAlt().equals("–") ? "–" : "± " + zahlText(st.zeitAlt(), 0) + " min", st.woher()};
+                for (int i = 0; i < z.length; i++) g.drawString(z[i], x + sx[i], y);
+            }
+            // ---- Zeitplan
+            y += 40;
+            g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+            g.setColor(th.text);
+            g.drawString("Was die Messung mit der Zeit trennt (Rayleigh: zwei Tiden brauchen eine Welle Unterschied)", x, y);
+            Instant beginn = null;
+            try {
+                if (tafel.kopf.containsKey("herkunft.beginn")) beginn = Instant.parse(tafel.kopf.get("herkunft.beginn").strip());
+            } catch (RuntimeException e) {
+                beginn = null;
+            }
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+            if (beginn == null) {
+                g.setColor(th.leise);
+                g.drawString("Beginn der Messung unbekannt – erst mit dem ersten Stand aus dem Messarchiv", x, y + 22);
+            } else {
+                Instant j = jetzt.get();
+                for (Gezeitenanalyse.Schwelle sw : Gezeitenanalyse.zeitplan(beginn)) {
+                    y += 22;
+                    boolean da = !sw.ab().isAfter(j);
+                    long rest = Math.max(0, (sw.ab().getEpochSecond() - j.getEpochSecond()) / 86_400);
+                    g.setColor(da ? HOCH : th.leise);
+                    g.fill(new Ellipse2D.Double(x, y - 10, 10, 10));
+                    g.setColor(da ? th.text : th.leise);
+                    g.drawString(DateTimeFormatter.ofPattern("d.M.yyyy", Locale.GERMAN).format(sw.ab().atZone(zone)), x + 20, y);
+                    g.drawString(String.format(Locale.GERMAN, "%.0f Tage", sw.tage()), x + 120, y);
+                    g.drawString(sw.text(), x + 200, y);
+                    g.drawString(da ? "erreicht" : "in " + rest + " Tagen", x + 860, y);
+                }
+                y += 26;
+                g.setColor(th.leise);
+                g.drawString("Bis dahin folgen K2, P1, NU2 und 2N2 aus ihren Nachbarn (Verhältnis der Gleichgewichtstide). Die Prüfung vergleicht jeden Monat neu; ersetzt wird "
+                        + "nur, was besser ist.", x, y);
+            }
+        }
+
+        /** Text in Zeilen auf die Breite; gibt das y unter der letzten Zeile. */
+        int umbrochen(Graphics2D g, String text, int x, int y, int breite, Color farbe) {
+            g.setColor(farbe);
+            FontMetrics fm = g.getFontMetrics();
+            StringBuilder z = new StringBuilder();
+            for (String w : text.split("\\s+")) {
+                if (z.length() > 0 && fm.stringWidth(z + " " + w) > breite) {
+                    g.drawString(z.toString(), x, y);
+                    y += fm.getHeight();
+                    z.setLength(0);
+                }
+                if (z.length() > 0) z.append(' ');
+                z.append(w);
+            }
+            if (z.length() > 0) {
+                g.drawString(z.toString(), x, y);
+                y += fm.getHeight();
+            }
+            return y;
         }
     }
 

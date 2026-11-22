@@ -21,14 +21,16 @@ import java.util.Locale;
  * ({@code gezeiten.datei}, nach {@code Ausgabe --gezeiten}). Prüfstein 6 die Tafel (Ort, Tiden, Marken des Modells),
  * 7 die Analyse am Bezug (Tage ohne Windstau, Rest), 8 die Kennwerte am Bezug getroffen, 9 die Zeiten am Bezug gegen die
  * Messung ohne Windstau, 10 die Übertragung an den Prüfpegel (Zeiten, M2, Kennwerte). Auskunft: der Ort, das Modell.
- * Dazu der Kalender mit den echten Konstanten ({@code Z1_Kalender_Hooge.png}).
+ * Dazu der Kalender mit den echten Konstanten ({@code Z1_Kalender_Hooge.png}). Seit DB5 (Werkbuch HalligHooge 176): die Tafel
+ * kann vom Sammler stammen (Analyse aus 10-Minuten-Mitteln, ohne Faktor auf die Kennwerte); Prüfstein 11 die Herkunft (Prüfung
+ * besser als die Tafel davor, Verlauf, Tiden) und das Bild {@code DB5_Kalender_Herkunft.png}.
  * <pre>
  * java -cp dist\HalligHooge.jar com.dan.steuerhaus.demo.GezeitenCheck --manifest src\szenen\Hooge.steuerhaus --bilder docs\status
  * </pre>
  */
 public final class GezeitenCheck {
     /** Grenzen [G]. */
-    static final double TAGE = 10, REST = 0.25, KENNWERT_BEZUG = 0.02, ZEIT = 20, ZEIT_MITTEL = 10, ZEIT_EIGEN = 3, M2_AMP = 0.03, M2_PHASE = 5, KENNWERT_PRUEF = 0.15;
+    static final double TAGE = 10, REST = 0.25, KENNWERT_BEZUG = 0.02, KENNWERT_OHNE = 0.25, ZEIT = 20, ZEIT_MITTEL = 10, ZEIT_EIGEN = 3, M2_AMP = 0.03, M2_PHASE = 5, KENNWERT_PRUEF = 0.15;
     static int steine, verstoesse;
 
     public static void main(String[] args) throws Exception {
@@ -40,7 +42,7 @@ public final class GezeitenCheck {
                 default -> throw new IllegalArgumentException("unbekannt: " + args[i]);
             }
         }
-        System.out.println("GezeitenCheck – Z1 (Werkbuch HalligHooge 155)");
+        System.out.println("GezeitenCheck – Z1 (Werkbuch HalligHooge 155), seit DB5 mit der Herkunft (176)");
         Manifest m = Manifest.lies(manifest);
         Gezeitenauftrag ga = Gezeitenauftrag.lies(m);
         Gezeitentafel t;
@@ -62,12 +64,17 @@ public final class GezeitenCheck {
         info("Abgeleitet", t.kopf.getOrDefault("bezug.abgeleitet", "–"));
 
         double[] an = w(t, "wert.analyse.bezug"), kb = w(t, "wert.kennwerte.bezug"), hb = w(t, "wert.hindcast.bezug"), ka = w(t, "wert.kalibrierung");
-        pruefe(an != null && an[0] / 1440 >= TAGE && an[2] <= REST, "Prüfstein 7: Analyse am Bezug ohne Zeiten mit Windstau",
-                an == null ? "–" : String.format(Locale.GERMAN, "%.1f von %.1f Tagen, Rest %.3f m", an[0] / 1440, an[1] / 1440, an[2]), "≥ 10 Tage; Rest ≤ 0,25 m");
-        pruefe(kb != null && Math.abs(kb[0] - kb[2]) <= KENNWERT_BEZUG && Math.abs(kb[1] - kb[3]) <= KENNWERT_BEZUG && ka != null && ka[0] > 0.9 && ka[0] < 1.25,
-                "Prüfstein 8: Kennwerte am Bezug getroffen (Vorhersage 2027 gegen MThw, MTnw 2011–2020)", kb == null || ka == null ? "–" : String.format(Locale.GERMAN,
-                        "MThw %+.3f gegen %+.3f, MTnw %+.3f gegen %+.3f m; Tidenhub der 30 Tage %.3f gegen %.3f m: Amplituden mal %.4f", kb[0], kb[2], kb[1], kb[3], ka[1], ka[2], ka[0]),
-                "± 0,02 m; Faktor 0,9–1,25");
+        // seit DB5: der vierte Wert ist der Schritt der Reihe in s (10-Minuten-Mittel); ohne ihn Minuten
+        double tagJe = an != null && an.length >= 4 ? an[3] / 86_400 : 1.0 / 1440;
+        pruefe(an != null && an[0] * tagJe >= TAGE && an[2] <= REST, "Prüfstein 7: Analyse am Bezug ohne Zeiten mit Windstau",
+                an == null ? "–" : String.format(Locale.GERMAN, "%.1f von %.1f Tagen, Rest %.3f m", an[0] * tagJe, an[1] * tagJe, an[2]), "≥ 10 Tage; Rest ≤ 0,25 m");
+        // seit DB5 (F278 A): ohne Faktor treffen die Kennwerte nicht – dann nur der Faktor, die Kennwerte zur Auskunft (± 0,25 m)
+        boolean ohneFaktor = "ohne".equals(t.kopf.getOrDefault("herkunft.faktor", "mit").strip());
+        double grenzeKw = ohneFaktor ? KENNWERT_OHNE : KENNWERT_BEZUG;
+        pruefe(kb != null && Math.abs(kb[0] - kb[2]) <= grenzeKw && Math.abs(kb[1] - kb[3]) <= grenzeKw && ka != null && ka[0] > 0.9 && ka[0] < 1.25,
+                "Prüfstein 8: Kennwerte am Bezug getroffen (Vorhersage 2027 gegen MThw, MTnw 2011–2020)" + (ohneFaktor ? ", ohne Faktor" : ""), kb == null || ka == null ? "–"
+                        : String.format(Locale.GERMAN, "MThw %+.3f gegen %+.3f, MTnw %+.3f gegen %+.3f m; Tidenhub der Analyse %.3f gegen %.3f m: Faktor %.4f%s", kb[0], kb[2], kb[1],
+                        kb[3], ka[1], ka[2], ka[0], ohneFaktor ? " (nicht angewandt)" : ""), ohneFaktor ? "± 0,25 m; Faktor 0,9–1,25" : "± 0,02 m; Faktor 0,9–1,25");
         pruefe(hb != null && hb[0] >= 40 && hb[2] <= ZEIT && Math.abs(hb[1]) <= ZEIT_MITTEL, "Prüfstein 9: Zeiten am Bezug gegen die Messung (Hoch- und Niedrigwasser ohne Windstau)",
                 hb == null ? "–" : String.format(Locale.GERMAN, "%.0f Extreme; Zeit %+.1f min im Mittel, |%.1f| min; Höhe %+.3f m, |%.3f| m", hb[0], hb[1], hb[2], hb[3], hb[4]),
                 "|Zeit| ≤ 20 min, Mittel ≤ ± 10 min; Höhe zur Auskunft");
@@ -79,6 +86,28 @@ public final class GezeitenCheck {
                         "|Zeit| %.1f min (eigene Analyse %.1f), Höhe |%.3f| m; M2 %.3f m %.1f° gegen %.3f m %.1f°; MThw %+.3f gegen %+.3f, MTnw %+.3f gegen %+.3f m", up[2], ep[2], up[4], mp[0], mp[1],
                         mp[2], mp[3], kp[0], kp[2], kp[1], kp[3]), "|Zeit| ≤ 20 min und ≤ eigene + 3 min; M2 ± 3 cm, ± 5°; Kennwerte ± 0,15 m");
         info("Hub der 30 Tage am Prüfpegel", t.kopf.getOrDefault("pruef.hub." + ga.pruef(), "–"));
+        // seit DB5: Prüfstein 11 die Herkunft
+        String hk = t.kopf.get("herkunft");
+        if (hk == null) pruefe(true, "Prüfstein 11: Herkunft (seit DB5)", "Tafel aus der Grundrechnung (Z1), noch kein Stand aus dem Messarchiv", "–");
+        else {
+            List<String> f11 = new ArrayList<>();
+            String[] hp = t.kopf.getOrDefault("herkunft.pruef", "").split(";");
+            double[] neu = null, alt = null;
+            try {
+                neu = new double[] {Double.parseDouble(hp[2].strip()), Double.NaN, Double.parseDouble(hp[4].strip()), Double.NaN, Double.parseDouble(hp[3].strip())};
+                alt = new double[] {Double.parseDouble(hp[2].strip()), Double.NaN, Double.parseDouble(hp[6].strip()), Double.NaN, Double.parseDouble(hp[5].strip())};
+            } catch (RuntimeException x) {
+                f11.add("herkunft.pruef unlesbar");
+            }
+            if (neu != null && !com.dan.steuerhaus.gezeiten.Gezeitenanalyse.besser(neu, alt)) f11.add("Prüfung nicht besser als die Tafel davor");
+            int nv = 0;
+            while (t.kopf.containsKey("verlauf." + (nv + 1))) nv++;
+            if (nv < 2) f11.add(nv + " Stände im Verlauf");
+            if (t.bezugTiden.size() < 14) f11.add(t.bezugTiden.size() + " Tiden am Bezug");
+            if (!t.kopf.containsKey("herkunft.beginn") || !t.kopf.containsKey("herkunft.bis")) f11.add("herkunft.beginn/bis fehlt");
+            pruefe(f11.isEmpty(), "Prüfstein 11: Herkunft (seit DB5) – Prüfung besser als die Tafel davor, Verlauf, Tiden", f11.isEmpty() ? String.format(Locale.GERMAN,
+                    "%s; %d Stände, %d Tiden am Bezug", hk, nv, t.bezugTiden.size()) : f11.toString(), "besser nach Gezeitenanalyse.besser; ≥ 2 Stände; ≥ 14 Tiden");
+        }
         double[] wo = w(t, "wert.ort"), wm = w(t, "wert.modell");
         if (wo != null) info("Ort " + t.ort, String.format(Locale.GERMAN, "MThw %+.3f, MTnw %+.3f, MThb %.3f m; Alter der Gezeit %.1f h", wo[0], wo[1], wo[0] - wo[1], wo[2]));
         for (int i = 1; i <= 3; i++) if (t.kopf.containsKey("uebertrag." + i)) info("Übertragung", t.kopf.get("uebertrag." + i));
@@ -98,6 +127,16 @@ public final class GezeitenCheck {
             });
             ImageIO.write(bi[0], "png", new File(bilder, "Z1_Kalender_Hooge.png"));
             info("Bild", "Z1_Kalender_Hooge.png");
+            // seit DB5: die Herkunft
+            SwingUtilities.invokeAndWait(() -> {
+                var k = new Kalenderansicht(tt, ga.marke(), ga.markeName(), ga.hinweis(), ZoneId.of(m.text("app.zone", "Europe/Berlin")), new File(System.getProperty("java.io.tmpdir")));
+                k.jetzt = Instant::now;
+                k.zeige(k.heute());
+                k.zeigeHerkunft(true);
+                bi[0] = k.alsBild(1460, 960);
+            });
+            ImageIO.write(bi[0], "png", new File(bilder, "DB5_Kalender_Herkunft.png"));
+            info("Bild", "DB5_Kalender_Herkunft.png");
         }
         ende();
     }
