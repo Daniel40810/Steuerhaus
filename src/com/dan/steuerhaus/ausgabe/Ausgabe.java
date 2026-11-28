@@ -270,6 +270,7 @@ public final class Ausgabe {
         int rate = com.dan.steuerhaus.ton.Ausgang.RATE;
         File wav = mitTon ? new File(ziel.getPath() + (ff != null ? ".ton.wav" : ".wav")) : null;
         com.dan.steuerhaus.ton.Klang klang = mitTon ? new com.dan.steuerhaus.ton.Klang(1958, rate) : null;
+        com.dan.steuerhaus.ton.Ereignisklang ereignisse = mitTon ? new com.dan.steuerhaus.ton.Ereignisklang(1959, rate) : null;   // seit S8c
         com.dan.steuerhaus.ton.WavDatei wd = mitTon ? new com.dan.steuerhaus.ton.WavDatei(wav, rate) : null;
         float[] tl = new float[rate], tr = new float[rate];
         long[] spitze = {0};
@@ -287,6 +288,9 @@ public final class Ausgabe {
                     int m = (int) (Math.round((nb0 + 1) * rate / o.bilderJeS()) - Math.round(nb0 * rate / o.bilderJeS()));
                     klang.setze(com.dan.steuerhaus.ton.Tonwerte.aus(a.b, a.b.zustand()));
                     klang.rechne(tl, tr, 0, m);
+                    com.dan.lauf.Buehne.Zustand zs = a.b.zustand();                             // seit S8c: die Ereignisse der Szene dazu
+                    if (zs != null && zs.blick != null) ereignisse.setze(a.b, zs.blick.ost, zs.blick.nord, zs.blick.hoehe, zs.blick.richtung);
+                    ereignisse.rechne(tl, tr, 0, m);
                     wd.schreibe(tl, tr, 0, m);
                 }
                 double s = (System.nanoTime() - nb) / 1e9;
@@ -298,6 +302,25 @@ public final class Ausgabe {
                     double je = (System.nanoTime() - nStart) / 1e9 / n;
                     System.out.printf(Locale.GERMAN, "Ausgabe: Bild %d · Film %s · %.2f s je Bild%s%n", n, mmss(n / o.bilderJeS()), je,
                             a.r.regie() != null ? " · Regie " + mmss(a.r.regie().uhr()) : a.r.imKino() ? " · Abspann" : "");
+                    // seit S8e2 (Seegang Werkbuch 104): -Dausgabe.flotte=an – Szenenzeit und die Schiffe mit Lotse (Phase, Ort, Abstand
+                    // zum Auge), zur Prüfung der Regiebücher mit Schiffen
+                    if ("an".equalsIgnoreCase(System.getProperty("ausgabe.flotte", "aus"))) {
+                        com.dan.lauf.Buehne.Zustand zs = a.b.zustand();
+                        com.dan.lauf.Flotte fl = a.b.flotte();
+                        StringBuilder sb = new StringBuilder("Ausgabe: Flotte " + (zs != null ? zs.jetzt : "?"));
+                        if (zs != null && zs.blick != null) sb.append(String.format(Locale.GERMAN, " · Auge %.0f %.0f Richtung %.0f°", zs.blick.ost, zs.blick.nord, zs.blick.richtung));
+                        if (fl != null)
+                            for (com.dan.lauf.Flotte.Schwimmer sw : fl.schwimmer) {
+                                String ph = sw.phase();
+                                if (ph == null) continue;
+                                double[] l = sw.koerper.lage();
+                                sb.append(String.format(Locale.GERMAN, " · %s: %s, %.0f %.0f", sw.angabe.name, ph, l[0], l[1]));
+                                if (zs != null && zs.blick != null)
+                                    sb.append(String.format(Locale.GERMAN, " (%.0f m, %.0f°)", Math.hypot(l[0] - zs.blick.ost, l[1] - zs.blick.nord),
+                                            (Math.toDegrees(Math.atan2(l[0] - zs.blick.ost, l[1] - zs.blick.nord)) + 360) % 360));
+                            }
+                        System.out.println(sb);
+                    }
                 }
             }
         }

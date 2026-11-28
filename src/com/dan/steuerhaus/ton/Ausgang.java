@@ -11,12 +11,17 @@ import javax.sound.sampled.SourceDataLine;
 public final class Ausgang implements AutoCloseable {
     public static final int RATE = 48000;
     public final Klang klang;
+    /** Seit S8c (Seegang Werkbuch 104): die Ereignisse der Szene (Brecher, Überlauf, Bugschlag, Typhon, Maschinen). */
+    public final Ereignisklang ereignisse;
     private volatile double lautstaerke = 0.7;
     private volatile boolean stumm, zu;
     private volatile String fehler;
     private Thread faden;
 
-    public Ausgang(long saat) { klang = new Klang(saat, RATE); }
+    public Ausgang(long saat) {
+        klang = new Klang(saat, RATE);
+        ereignisse = new Ereignisklang(saat + 1, RATE);
+    }
 
     /** Startet die Wiedergabe; false, wenn es kein Gerät gibt (dann sagt {@link #fehler}, warum). */
     public boolean starte() {
@@ -43,6 +48,7 @@ public final class Ausgang implements AutoCloseable {
         try {
             while (!zu) {
                 klang.rechne(l, r, 0, n);
+                ereignisse.rechne(l, r, 0, n);                                    // seit S8c
                 double soll = stumm ? 0 : lautstaerke;
                 for (int i = 0; i < n; i++) {
                     g += (soll - g) * (1.0 / (0.3 * RATE));

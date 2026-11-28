@@ -25,9 +25,15 @@ import java.util.Map;
  * </pre>
  * Ablage {@code <Ordner der Szenendatei>/vorschau/szenario_<schluessel>.png} und {@code ansicht_<schluessel>.png},
  * 480 × 270. Live-Szenarien bekommen kein Bild (der Lauf finge erst an); der Katalog zeichnet einen Platzhalter.
+ * <p>
+ * Seit Seegang S7d2 (Seegang Werkbuch 90): Für die Ansichten in {@code vorschau.schwimmer} (Manifest) laufen die Schwimmer
+ * des Szenarios vor dem Bild {@link #SCHWIMMER_BILDER} Bilder lang (so liegen sie am Platz, und eine Fähre in Fahrt zieht
+ * schon Kielwasser); Ansichten an Bord ({@code ansicht.<n>.bord}) bekommen das Bild der Bordkamera.
  */
 public final class Vorschau {
     public static final int BREITE = 480, HOEHE = 270;
+    /** Seit S7d2: Bilder der Schwimmer vor dem Vorschaubild (1/30 s je Bild) [G]. */
+    public static final int SCHWIMMER_BILDER = 300;
 
     private Vorschau() { }
 
@@ -57,6 +63,7 @@ public final class Vorschau {
             Instant t = v.length > 1 ? Instant.parse(v[1]) : null;
             auftraege.computeIfAbsent(s.schluessel, k -> new java.util.ArrayList<>()).add(new Auftrag("ansicht_" + a.schluessel, a, t));
         }
+        java.util.Set<String> mitSchwimmern = new java.util.HashSet<>(java.util.Arrays.asList(m.text("vorschau.schwimmer", "").split("[,\\s]+")));
         File gebiet = szenen.gebiet();
         double[] po = szenen.zahlen("pegel.ort");
         for (Map.Entry<String, List<Object>> e : auftraege.entrySet()) {
@@ -72,6 +79,7 @@ public final class Vorschau {
                         Blick bl = new Blick();
                         a.ansicht().setze(bl, b.gelaende, b.utm(), b.uhr().bei(t));
                         bl.groesse(BREITE, HOEHE);
+                        if (mitSchwimmern.contains(a.ansicht().schluessel) || a.ansicht().bord != null) bl = schwimmer(b, a.ansicht(), bl, t);
                         float[] p = b.standbild(bl, t);
                         BufferedImage bild = new BufferedImage(BREITE, HOEHE, BufferedImage.TYPE_INT_RGB);
                         for (int y = 0; y < HOEHE; y++)
@@ -95,6 +103,32 @@ public final class Vorschau {
         }
         System.out.printf(Locale.GERMAN, "Vorschau: %d Bilder in %s, %d Fehler, %.1f min%n", n, ordner, fehler, (System.nanoTime() - n0) / 6e10);
         return n;
+    }
+
+    /**
+     * Seit S7d2: die Schwimmer des Szenarios {@link #SCHWIMMER_BILDER} Bilder lang bis zur Zeit t (neu gesetzt bei
+     * t − Dauer); an Bord der Blick der Bordkamera. Ohne Schwimmer der Blick unverändert.
+     */
+    static Blick schwimmer(Buehne b, Ansicht a, Blick bl, double t) throws InterruptedException {
+        com.dan.lauf.Flotte f = b.flotte();
+        if (f == null) return bl;
+        double dt = 1.0 / 30, t0 = t - SCHWIMMER_BILDER * dt;
+        b.standbild(bl, t0);                                                // Stände laden
+        f.neuSetzen();
+        com.dan.lauf.Kamera bk = a.bord != null ? b.bordKamera(a) : null;     // seit S8d auch der Schwimmerblick
+        Blick aus = bl;
+        for (int i = 0; i <= SCHWIMMER_BILDER; i++) {
+            double ti = t0 + i * dt;
+            b.flotteBild(ti, 1, dt);
+            f.warte();
+            if (bk != null) {
+                Blick n = bk.weiter(dt, ti, bl);
+                if (n != null) aus = n;
+            }
+        }
+        if (bk != null) b.bord(null);
+        aus.groesse(BREITE, HOEHE);
+        return aus;
     }
 
     private record Auftrag(String datei, Ansicht ansicht, Instant zeit) { }

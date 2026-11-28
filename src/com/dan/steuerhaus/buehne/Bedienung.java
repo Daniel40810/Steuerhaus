@@ -43,7 +43,8 @@ public final class Bedienung {
     /** Einen Schnitt ziehen (zwei Klicks im Bild), ihn abbrechen oder wegnehmen. */
     public Runnable schnitt = () -> { }, schnittWeg = () -> { };
     /** Teile an und aus. */
-    public final Schalter haeuser = new Schalter("Häuser"), gestalt = new Schalter("Gestalt"), bewuchs = new Schalter("Bewuchs"), salzwiese = new Schalter("Salzwiese"), brandung = new Schalter("Brandung");
+    public final Schalter haeuser = new Schalter("Häuser"), gestalt = new Schalter("Gestalt"), bewuchs = new Schalter("Bewuchs"), salzwiese = new Schalter("Salzwiese"), brandung = new Schalter("Brandung"),
+            seegang = new Schalter("Seegang");                             // seit S3d (SF37 A): die neue Fläche des Seegangs
 
     /** Ein Knopf, der einen Teil der Bühne an- und ausschaltet. */
     public final class Schalter {
@@ -112,7 +113,7 @@ public final class Bedienung {
 
         JPanel eb = new JPanel(new GridLayout(0, 2, 6, 6));
         eb.setOpaque(false);
-        for (Schalter k : new Schalter[] {haeuser, gestalt, bewuchs, salzwiese, brandung}) eb.add(k.knopf);
+        for (Schalter k : new Schalter[] {haeuser, gestalt, bewuchs, salzwiese, brandung, seegang}) eb.add(k.knopf);
         ebenenTeil = spalte(eb);
 
         fotoKnopf.addActionListener(e -> {

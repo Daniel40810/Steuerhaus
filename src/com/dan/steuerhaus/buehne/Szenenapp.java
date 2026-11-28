@@ -878,7 +878,7 @@ public final class Szenenapp {
         Katalog.gruppiert(manifest.gruppen("ansichten"), szenen.ansichten(), a -> a.schluessel).forEach((g, l) -> {
             for (Ansicht a : l) b.neu("ansicht." + a.schluessel, "Szene/Ansicht/" + g, a.name, null, () -> ansichtAusOberflaeche(a)).schalter(() -> ansichtJetzt == a);
         });
-        for (Bedienung.Schalter k : new Bedienung.Schalter[] {bedienung.haeuser, bedienung.gestalt, bedienung.bewuchs, bedienung.salzwiese, bedienung.brandung})
+        for (Bedienung.Schalter k : new Bedienung.Schalter[] {bedienung.haeuser, bedienung.gestalt, bedienung.bewuchs, bedienung.salzwiese, bedienung.brandung, bedienung.seegang})
             b.neu("ebene." + k.name.toLowerCase(Locale.GERMAN), "Szene/Ebenen", k.name, null, k::umschalten).schalter(k::an).wenn(k::da);
         // Zeit
         b.neu("zeit.vor", "Zeit", "Vor", "ctrl RIGHT", () -> bedienung.richtung(Bedienung.VOR)).schalter(() -> bedienung.richtung() == Bedienung.VOR);
@@ -954,12 +954,15 @@ public final class Szenenapp {
         bedienung.bewuchs.ziel = an -> b.bewuchs(an && qualitaet.stufe().erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.BEWUCHS));
         bedienung.salzwiese.ziel = b::salzwiese;
         bedienung.brandung.ziel = an -> b.brandung(an && qualitaet.stufe().erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.BRANDUNG));
+        // seit S3d (SF37 A): die neue Fläche des Seegangs (nur Szenarien mit Seegang aus einem Archiv; sonst ohne Wirkung)
+        bedienung.seegang.ziel = an -> b.seegangFlaeche(an && qualitaet.stufe().erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.SEEGANG));
         SwingUtilities.invokeLater(() -> {
             bedienung.haeuser.zeige(b.hatHaeuser(), b.haeuserAn());
             bedienung.gestalt.zeige(b.hatGestalt(), b.gestaltAn());
             bedienung.bewuchs.zeige(b.hatBewuchs(), b.bewuchsAn());
             bedienung.salzwiese.zeige(b.hatSalzwiese(), b.salzwieseAn());
             bedienung.brandung.zeige(true, b.brandungAn());
+            bedienung.seegang.zeige(true, b.seegangFlaecheAn());
         });
         hf.leinwand.addMouseListener(new MouseAdapter() {
             @Override public void mouseClicked(MouseEvent e) { klick(b, e); }
@@ -1091,8 +1094,12 @@ public final class Szenenapp {
         var st = qualitaet.stufe();
         b.bewuchs(bedienung.bewuchs.an() && st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.BEWUCHS));
         b.brandung(bedienung.brandung.an() && st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.BRANDUNG));
+        b.seegangFlaeche(bedienung.seegang.an() && st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.SEEGANG));
         b.gestalt(bedienung.gestalt.an() && st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.GESTALT));
         b.kimmung.an = st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.KIMMUNG);
+        // seit S9b-4 (Seegang Werkbuch 107, SF173 A): in Mittel und Niedrig spiegelt nur der Himmel
+        com.dan.render.water.Wasserbild wb = b.wasserbild();
+        if (wb != null) wb.spiegeln = st.erlaubt(com.dan.steuerhaus.analyse.Qualitaet.Teil.SPIEGELUNG);
     }
 
     private void qualitaetSetzen(com.dan.steuerhaus.analyse.Qualitaet.Stufe st, boolean auto) {
@@ -1369,6 +1376,7 @@ public final class Szenenapp {
                     case "gestalt" -> bedienung.gestalt;
                     case "bewuchs" -> bedienung.bewuchs;
                     case "salzwiese" -> bedienung.salzwiese;
+                    case "seegang" -> bedienung.seegang;
                     default -> bedienung.brandung;
                 };
                 SwingUtilities.invokeLater(() -> {
@@ -2902,6 +2910,7 @@ public final class Szenenapp {
         if (t == null) return;
         com.dan.steuerhaus.ton.Klang.Werte w = b.wechselt() ? com.dan.steuerhaus.ton.Klang.Werte.STILL : com.dan.steuerhaus.ton.Tonwerte.aus(b, z);
         t.klang.setze(w);
+        if (z != null && z.blick != null) t.ereignisse.setze(b.wechselt() ? null : b, z.blick.ost, z.blick.nord, z.blick.hoehe, z.blick.richtung);   // seit S8c
         t.stumm(b.ruht() || (seite != null && seite.sichtbar()) || !einstellungen.wahr("ton", true));
         if (o.sekunden() > 0 && tonZaehler++ % 50 == 0)
             System.out.printf(Locale.GERMAN, "Steuerhaus: Ton: Wind %.1f m/s von %.0f°, Brandung %.2f, nah %.2f, Tag %.2f, Möwen %.2f, Plätschern %.2f, Rufe bisher %d%n", w.wind(),

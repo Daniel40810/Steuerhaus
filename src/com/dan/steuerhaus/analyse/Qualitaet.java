@@ -5,7 +5,8 @@ package com.dan.steuerhaus.analyse;
  * begrenzt nur – was der Benutzer ausgeschaltet hat, bleibt aus.
  * <ul>
  * <li>{@link Stufe#HOCH}: alles, was an ist.</li>
- * <li>{@link Stufe#MITTEL}: ohne Bewuchs und Kimmung.</li>
+ * <li>{@link Stufe#MITTEL}: ohne Bewuchs und Kimmung; seit S9b-4 (Seegang Werkbuch 107, SF173 A) auch ohne die Spiegelung des
+ * Geländes im Wasser (nur der Himmel spiegelt).</li>
  * <li>{@link Stufe#NIEDRIG}: dazu ohne Brandung und Gestalt.</li>
  * </ul>
  * Automatisch (Hysterese, damit nichts pendelt): Liegt die Bildrate {@link #RUNTER_S} s lang unter {@link #UNTEN} B/s,
@@ -26,13 +27,14 @@ public final class Qualitaet {
         /** Darf der Teil in dieser Stufe an sein? */
         public boolean erlaubt(Teil t) {
             return switch (t) {
-                case BEWUCHS, KIMMUNG -> this == HOCH;
-                case BRANDUNG, GESTALT -> this != NIEDRIG;
+                case BEWUCHS, KIMMUNG, SPIEGELUNG -> this == HOCH;
+                case BRANDUNG, GESTALT, SEEGANG -> this != NIEDRIG;
             };
         }
     }
 
-    public enum Teil { BEWUCHS, KIMMUNG, BRANDUNG, GESTALT }
+    /** Seit S3d (Seegang Werkbuch 28, SF37 A): SEEGANG ist die neue Fläche des Seegangs (Nahfeld, Clipmap, Netz). */
+    public enum Teil { BEWUCHS, KIMMUNG, BRANDUNG, GESTALT, SEEGANG, SPIEGELUNG }
 
     public static final double UNTEN = 30, OBEN = 55, RUNTER_S = 3, HOCH_S = 15, RUHE_S = 15;
 

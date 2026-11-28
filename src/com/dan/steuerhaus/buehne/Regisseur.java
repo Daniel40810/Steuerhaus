@@ -104,6 +104,12 @@ public final class Regisseur implements Kamera, Regie.Ctx {
     private volatile String meldung;
     /** Ein Sprung in der Zeit, der auf das neue Szenario wartet (sonst gälte er für die Uhr des alten). */
     private Instant zeitZiel;
+    /**
+     * Seit S8e2 (Seegang Werkbuch 104, Befund 16): ein Zeitraffer, der nach dem Schnitt und nach dem Wechsel des Szenarios gilt.
+     * Bis dahin setzte {@code raffer} ihn sofort; das neue Szenario stellte danach seinen eigenen (300) ein, und im Regiebuch
+     * „Seegang“ lief der Abschnitt nach „szenario ruhigsee … raffer 1“ 300-fach (der Adler-Express lag schon am Anleger).
+     */
+    private double rafferZiel = Double.NaN;
     private int balkenAlt = -1;
     private int meldungenGesehen;
     /**
@@ -328,6 +334,10 @@ public final class Regisseur implements Kamera, Regie.Ctx {
             b.zeit((zeitZiel.toEpochMilli() - b.uhr().start.toEpochMilli()) / 1000.0);
             zeitZiel = null;
         }
+        if (!Double.isNaN(rafferZiel) && !b.wechselt()) {                    // seit S8e2: wie der Sprung, nach dem Wechsel
+            app.raffer(rafferZiel);
+            rafferZiel = Double.NaN;
+        }
         // ein Schnitt im Kino: erst das Bild merken lassen, dann schneiden
         if (!nachSchnitt.isEmpty()) {
             if (merkStand < 0) {
@@ -343,7 +353,7 @@ public final class Regisseur implements Kamera, Regie.Ctx {
         }
         if (vorbereiten >= 0) {
             // das Kino steht schwarz, bis Szenario, Ansicht und Sprung in der Zeit gelten und zwei Bilder danach fertig sind
-            boolean fertig = zeitZiel == null && nachSchnitt.isEmpty() && !b.wechselt() && b.uhr() != null;
+            boolean fertig = zeitZiel == null && Double.isNaN(rafferZiel) && nachSchnitt.isEmpty() && !b.wechselt() && b.uhr() != null;
             vorbereiten = fertig ? vorbereiten + 1 : 0;
             if (vorbereiten < 3) {
                 kino.schritt(0);
@@ -468,7 +478,12 @@ public final class Regisseur implements Kamera, Regie.Ctx {
                 Instant ziel = zeitpunkt(arg, false);
                 if (ziel != null) schnitt(() -> zeitZiel = ziel);
             }
-            case "raffer" -> app.raffer(Double.parseDouble(arg.replace(',', '.')));
+            case "raffer" -> {
+                // seit S8e2 (Befund 16): steht ein Schnitt oder ein Wechsel des Szenarios an, gilt er danach, sonst sofort
+                double x = Double.parseDouble(arg.replace(',', '.'));
+                if (b.wechselt() || !nachSchnitt.isEmpty()) schnitt(() -> rafferZiel = x);
+                else app.raffer(x);
+            }
             case "halt" -> app.halt(true);
             case "weiter" -> app.halt(false);
             case "ebene" -> {
@@ -532,7 +547,7 @@ public final class Regisseur implements Kamera, Regie.Ctx {
             case "landunter" -> !Double.isNaN(z.pegel) && !Double.isNaN(app.marke()) && z.pegel > app.marke();
             case "fahrt" -> fahrt == null && nachSchnitt.isEmpty();
             // seit X3b: das Szenario ist offen und der Sprung in der Zeit getan (danach setzt es keine eigene Ansicht mehr)
-            case "szene" -> !b.wechselt() && b.uhr() != null && zeitZiel == null && nachSchnitt.isEmpty();
+            case "szene" -> !b.wechselt() && b.uhr() != null && zeitZiel == null && Double.isNaN(rafferZiel) && nachSchnitt.isEmpty();
             case "klick" -> {
                 boolean geklickt = weiterKlick;
                 if (geklickt) {
