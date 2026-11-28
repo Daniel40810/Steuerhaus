@@ -13,7 +13,8 @@
 !/lib/CopyLibs/
 
 # Arbeitsstaende, Absturzprotokolle
-/_to_delete/
+# _to_delete in jedem Ordner, nicht nur oben (Seegang Werkbuch 113, Daniel 28.11.)
+_to_delete/
 hs_err_pid*.log
 
 # Python-Zwischenstaende
